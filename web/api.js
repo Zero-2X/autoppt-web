@@ -20,6 +20,20 @@ export const auth = {
 };
 
 let refreshing = null;
+const REASONS = "autoppt.accessReasons";
+
+// An administrator opening another user's job must give a reason; it is sent with every call for that job.
+export function setAccessReason(jobId, reason) {
+  const reasons = JSON.parse(sessionStorage.getItem(REASONS) || "{}");
+  reasons[jobId] = reason;
+  sessionStorage.setItem(REASONS, JSON.stringify(reasons));
+}
+
+function accessReason(path) {
+  const match = path.match(/^\/api\/jobs\/([0-9a-f]{32})/);
+  if (!match) return null;
+  return JSON.parse(sessionStorage.getItem(REASONS) || "{}")[match[1]] || null;
+}
 
 async function refresh() {
   const tokens = auth.get();
@@ -41,6 +55,8 @@ export async function request(method, path, body, extraHeaders = {}) {
     const headers = { ...extraHeaders };
     const tokens = auth.get();
     if (tokens) headers.Authorization = `Bearer ${tokens.access_token}`;
+    const reason = accessReason(path);
+    if (reason) headers["X-Access-Reason"] = encodeURIComponent(reason);
     if (body !== undefined) headers["Content-Type"] = "application/json";
     return fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   };

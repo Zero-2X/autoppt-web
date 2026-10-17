@@ -123,6 +123,21 @@ def codex_command() -> list[str]:
     return [found]
 
 
+def windows_sandbox_mode() -> str | None:
+    """The Windows sandbox implementation every service run uses.
+
+    Measured 2026-10-17 (Codex 0.163.0): with this machine's ``windows.sandbox = "elevated"``
+    (elevated setup never completed) ``codex exec -s workspace-write`` reached the network and
+    wrote outside the job directory.  With ``"unelevated"`` (restricted token) network and
+    outside writes are blocked; reads are not restricted in either mode without the elevated
+    setup.  ``AUTOPPT_CODEX_WINDOWS_SANDBOX`` overrides; an empty value leaves the config alone.
+    """
+    if os.name != "nt":
+        return None
+    value = os.getenv("AUTOPPT_CODEX_WINDOWS_SANDBOX", "unelevated").strip()
+    return value or None
+
+
 def build_exec_args(
     *,
     sandbox: str = "read-only",
@@ -131,8 +146,12 @@ def build_exec_args(
     images: Iterable[Path] = (),
     output_schema: Path | None = None,
     last_message_path: Path | None = None,
+    windows_sandbox: str | None = "auto",
 ) -> list[str]:
     args = ["exec", "--skip-git-repo-check", "--json", "-s", sandbox]
+    mode = windows_sandbox_mode() if windows_sandbox == "auto" else windows_sandbox
+    if mode:
+        args += ["-c", f'windows.sandbox="{mode}"']
     if model:
         args += ["-m", model]
     if reasoning_effort:

@@ -210,7 +210,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     engine = make_engine(settings.database_url)
     Base.metadata.create_all(engine)  # Alembic migrations take over in deployed environments
     factory = make_session_factory(engine)
-    storage = LocalStorage(settings.storage_dir)
+    storage = LocalStorage(settings.storage_dir, key=settings.storage_key or None)
     app = FastAPI(title="AutoPPT API", version="0.1.0")
     app.state.settings, app.state.engine, app.state.session_factory, app.state.storage = settings, engine, factory, storage
     if settings.scan_command:
@@ -275,10 +275,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(401, "unknown worker")
         return worker
 
-    def own_job(job_id: str, user: User, session: Session) -> Job:
+    def own_job(job_id: str, user: User, session: Session, request: Request | None = None) -> Job:
         job = session.get(Job, job_id)
         if job is None or (job.user_id != user.id and not user.is_admin) or job.state == "deleted":
             raise HTTPException(404, "job not found")
+        if job.user_id != user.id:
+            # An administrator looking at a customer's job must say why; every access is audited.
+            from urllib.parse import unquote
+
+            reason = unquote(request.headers.get("X-Access-Reason", "")).strip() if request is not None else ""
+            if not reason:
+                raise HTTPException(403, "X-Access-Reason header required to open another user's job")
+            audit(session, "admin", user.id, "admin.access_job", job.id, reason=reason[:300],
+                  path=request.url.path if request is not None else "")
+            session.commit()  # the access record survives even if the action itself is refused
         return job
 
     def idempotent(session: Session, scope: str, key: str | None, body: Any, compute):
@@ -557,14 +567,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         with partial.open("rb") as handle:
             head = handle.read(8192)
         kind = sniff_kind(head, partial)
+        scanner = getattr(app.state, "scanner", None)
+        scan = scanner(partial) if scanner else "not_scanned"  # scan the plaintext, before encryption at rest
         sha, size, path = storage.finish(upload_id)
         if upload.expected_sha256 and upload.expected_sha256 != sha:
             upload.status = "failed"
             raise HTTPException(422, "sha256 does not match the uploaded bytes")
         stored = session.get(StoredFile, sha)
         if stored is None:
-            scanner = getattr(app.state, "scanner", None)
-            scan = scanner(path) if scanner else "not_scanned"
             stored = StoredFile(sha256=sha, size=size, storage_key=storage.key_for(sha), sniffed_kind=kind, scan_status=scan)
             session.add(stored)
         upload.status, upload.sha256 = "complete", sha
@@ -580,6 +590,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         stored = session.get(StoredFile, sha)
         if stored is None:
             raise HTTPException(404, "file not found")
+        if storage.encrypted:
+            import mimetypes
+            from urllib.parse import quote
+
+            media = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            return Response(content=storage.read_bytes(stored.storage_key), media_type=media,
+                            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name or sha)}"})
         return FileResponse(storage.path(stored.storage_key), filename=name or sha)
 
     # ------------------------------------------------------------ jobs
@@ -594,48 +611,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return [job_view(session, job) for job in jobs]
 
     @app.get("/api/jobs/{job_id}")
-    def get_job(job_id: str, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
-        return job_view(session, own_job(job_id, user, session), detail=True)
+    def get_job(request: Request, job_id: str, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+        return job_view(session, own_job(job_id, user, session, request), detail=True)
 
     @app.put("/api/jobs/{job_id}")
-    def edit_job(job_id: str, body: DraftBody, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
-        return job_view(session, update_draft(session, own_job(job_id, user, session), body.request))
+    def edit_job(request: Request, job_id: str, body: DraftBody, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+        return job_view(session, update_draft(session, own_job(job_id, user, session, request), body.request))
 
     @app.post("/api/jobs/{job_id}/estimate")
-    def estimate(job_id: str, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
-        return estimate_job(session, user, own_job(job_id, user, session))
+    def estimate(request: Request, job_id: str, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+        return estimate_job(session, user, own_job(job_id, user, session, request))
 
     @app.post("/api/jobs/{job_id}/submit")
-    def submit(job_id: str, body: SubmitBody, user: User = Depends(current_user), session: Session = Depends(db),
+    def submit(request: Request, job_id: str, body: SubmitBody, user: User = Depends(current_user), session: Session = Depends(db),
                idempotency_key: str | None = Header(default=None)):
-        job = own_job(job_id, user, session)
+        job = own_job(job_id, user, session, request)
         return idempotent(session, f"submit:{user.id}", idempotency_key, body.model_dump(),
                           lambda: job_view(session, submit_job(session, user, job, confirm_total=body.confirm_total)))
 
     @app.post("/api/jobs/{job_id}/cancel")
-    def cancel(job_id: str, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
-        return job_view(session, cancel_job(session, own_job(job_id, user, session), actor=user.id))
+    def cancel(request: Request, job_id: str, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+        return job_view(session, cancel_job(session, own_job(job_id, user, session, request), actor=user.id))
 
     @app.delete("/api/jobs/{job_id}")
-    def delete_job(job_id: str, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def delete_job(request: Request, job_id: str, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
         from autoppt_api.lifecycle import delete_job_data
 
-        job = own_job(job_id, user, session)
+        job = own_job(job_id, user, session, request)
         if job.state not in ("draft", "estimated", "delivered", "failed", "cancelled"):
             raise HTTPException(409, "cancel the job before deleting it")
         removed = delete_job_data(session, storage, job, actor_type="user", actor_id=user.id)
         return {"deleted": True, "removed_blobs": removed}
 
     @app.get("/api/jobs/{job_id}/events")
-    def events(job_id: str, after: int = 0, user: User = Depends(current_user), session: Session = Depends(db)) -> list[dict[str, Any]]:
-        own_job(job_id, user, session)
+    def events(request: Request, job_id: str, after: int = 0, user: User = Depends(current_user), session: Session = Depends(db)) -> list[dict[str, Any]]:
+        own_job(job_id, user, session, request)
         rows = session.scalars(select(JobEvent).where(JobEvent.job_id == job_id, JobEvent.id > after).order_by(JobEvent.id).limit(500))
         return [{"id": e.id, "kind": e.kind, "message": e.message, "data": e.data, "at": iso(e.created_at)} for e in rows]
 
     @app.get("/api/jobs/{job_id}/events/stream")
-    def stream(job_id: str, after: int = 0, timeout: float = Query(25.0, ge=0, le=300), user: User = Depends(current_user),
+    def stream(request: Request, job_id: str, after: int = 0, timeout: float = Query(25.0, ge=0, le=300), user: User = Depends(current_user),
                session: Session = Depends(db)) -> StreamingResponse:
-        own_job(job_id, user, session)
+        own_job(job_id, user, session, request)
         session.commit()  # release the request's lock before the long-lived stream polls with its own sessions
 
         def generate() -> Iterator[str]:
@@ -655,8 +672,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return StreamingResponse(generate(), media_type="text/event-stream")
 
     @app.get("/api/jobs/{job_id}/checkpoint")
-    def get_checkpoint(job_id: str, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
-        job = own_job(job_id, user, session)
+    def get_checkpoint(request: Request, job_id: str, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+        job = own_job(job_id, user, session, request)
         checkpoint = open_checkpoint_for(session, job)
         if checkpoint is None:
             raise HTTPException(404, "no open checkpoint")
@@ -673,9 +690,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "free_rounds": rules.get("free_rounds")}}
 
     @app.post("/api/jobs/{job_id}/checkpoint/{checkpoint_id}/response")
-    def respond(job_id: str, checkpoint_id: str, body: ResponseBody, user: User = Depends(current_user),
+    def respond(request: Request, job_id: str, checkpoint_id: str, body: ResponseBody, user: User = Depends(current_user),
                 session: Session = Depends(db)) -> dict[str, Any]:
-        job = own_job(job_id, user, session)
+        job = own_job(job_id, user, session, request)
         responder = "user" if job.user_id == user.id else "admin"
         answer_checkpoint(session, user, job, checkpoint_id, body.model_dump(), responder=responder)
         return job_view(session, job, detail=True)

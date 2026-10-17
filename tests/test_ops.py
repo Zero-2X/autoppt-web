@@ -149,7 +149,7 @@ def test_worker_crash_mid_phase_is_recovered_by_another_worker_without_double_ch
     worker_b = ApiWorker(api, second["token"], tmp_path / "machine-b", mock=True, heartbeat_s=3600)
     result = worker_b.run_once()  # fresh machine: restores the intake snapshot, then plans
     assert result["phase"] == "planning" and result["job_state"] == "cp1_outline"
-    assert (tmp_path / "machine-b" / job["id"] / "workspace/evidence_workspace/evidence-ledger.json").exists()
+    assert not (tmp_path / "machine-b" / job["id"]).exists()  # nothing of the job stays on the machine after reporting
     phases = api.get(f"/api/jobs/{job['id']}", headers=user).json()["phases"]
     assert [p["status"] for p in phases if p["phase"] == "planning"] == ["expired", "done"]
     planning_charges = [row for row in credits(api, user)["statement"] if row["kind"] == "settle"]

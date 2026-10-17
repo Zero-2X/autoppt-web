@@ -68,10 +68,28 @@ def kind_matches_name(kind: str, filename: str) -> bool:
 
 
 class LocalStorage:
-    def __init__(self, root: Path) -> None:
+    """Content-addressed by the sha256 of the plaintext; optionally encrypted at rest (Fernet)."""
+
+    def __init__(self, root: Path, *, key: str | None = None) -> None:
         self.root = Path(root)
+        self._fernet = None
+        if key:
+            from cryptography.fernet import Fernet
+
+            self._fernet = Fernet(key.encode() if isinstance(key, str) else key)
         (self.root / "blobs").mkdir(parents=True, exist_ok=True)
         (self.root / "partial").mkdir(parents=True, exist_ok=True)
+
+    @property
+    def encrypted(self) -> bool:
+        return self._fernet is not None
+
+    def _seal(self, data: bytes) -> bytes:
+        return self._fernet.encrypt(data) if self._fernet else data
+
+    def read_bytes(self, key: str) -> bytes:
+        data = self.path(key).read_bytes()
+        return self._fernet.decrypt(data) if self._fernet else data
 
     def key_for(self, sha256: str) -> str:
         return f"blobs/{sha256[:2]}/{sha256}"
@@ -112,18 +130,22 @@ class LocalStorage:
         sha = digest.hexdigest()
         target = self.path(self.key_for(sha))
         target.parent.mkdir(parents=True, exist_ok=True)
+        size = source.stat().st_size
         if target.exists():
+            source.unlink()
+        elif self._fernet:
+            target.write_bytes(self._seal(source.read_bytes()))
             source.unlink()
         else:
             shutil.move(str(source), target)
-        return sha, target.stat().st_size, target
+        return sha, size, target
 
     def put_bytes(self, data: bytes) -> tuple[str, Path]:
         sha = hashlib.sha256(data).hexdigest()
         target = self.path(self.key_for(sha))
         if not target.exists():
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
+            target.write_bytes(self._seal(data))
         return sha, target
 
     def put_stream(self, stream: BinaryIO, limit: int) -> tuple[str, int, Path]:
@@ -132,8 +154,8 @@ class LocalStorage:
         self.append(temp.name, 0, stream, limit)
         return self.finish(temp.name)
 
-    def open(self, key: str) -> io.BufferedReader:
-        return self.path(key).open("rb")
+    def open(self, key: str) -> io.BytesIO:
+        return io.BytesIO(self.read_bytes(key))
 
     def delete(self, key: str) -> None:
         self.path(key).unlink(missing_ok=True)

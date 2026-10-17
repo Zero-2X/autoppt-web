@@ -37,7 +37,9 @@ from autoppt_service.parsers.archive import safe_member_path
 from autoppt_service.run_job import PhaseError, PhaseNotReady, run_phase
 from autoppt_service.status import CHECKPOINT_STATES, load_job_state
 
+# Raw agent event logs contain whatever the agent read (possibly other files on the machine): never leave the worker.
 SNAPSHOT_EXCLUDE = ("service/codex-scratch/", "service/.snapshot-sha256", "tmp/")
+SNAPSHOT_EXCLUDE_NAMES = ("events.jsonl", "stderr.txt")
 PHASE_TIMEOUTS_S = {"intake": 1800, "planning": 3 * 3600, "masters": 6 * 3600, "reconstruct": 12 * 3600, "package": 3600}
 FINISHED_STATES = ("delivered", "failed", "cancelled")
 SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024 * 1024
@@ -55,7 +57,7 @@ def snapshot_bytes(job_dir: Path) -> bytes:
             if not path.is_file():
                 continue
             relative = path.relative_to(job_dir).as_posix()
-            if relative.startswith(SNAPSHOT_EXCLUDE) or "__pycache__" in relative:
+            if relative.startswith(SNAPSHOT_EXCLUDE) or "__pycache__" in relative or path.name in SNAPSHOT_EXCLUDE_NAMES:
                 continue
             total += path.stat().st_size
             if total > SNAPSHOT_MAX_BYTES:
@@ -109,6 +111,17 @@ class ApiWorker:
         self.min_free_gb = min_free_gb
         self.phase_timeouts = {**PHASE_TIMEOUTS_S, **(phase_timeouts or {})}
         self.cleanup_local = cleanup_local
+        self._secrets: set[str] | None = None
+
+    def secrets(self) -> set[str]:
+        """This machine's Codex credentials, loaded once and kept only in memory for the leak guard."""
+        if self._secrets is None:
+            from autoppt_service.codex_exec import load_profiles
+            from autoppt_service.leakguard import profile_secrets
+
+            homes = [profile.home() for profile in load_profiles(self.profiles)]
+            self._secrets = profile_secrets(homes)
+        return self._secrets
 
     # ------------------------------------------------------------ http helpers
 
@@ -166,11 +179,24 @@ class ApiWorker:
                 )
             if watchdog["killed"]:
                 result = {**result, "reason": f"watchdog stopped {', '.join(watchdog['killed'])}"}
+            from autoppt_service.leakguard import scan_outputs
+
+            findings = scan_outputs(job_dir, self.secrets())
+            if findings:
+                # Upload nothing: the snapshot and deliverables would carry the leaked text.
+                stop.set()
+                self._post(f"/api/worker/jobs/{job_id}/fail",
+                           {"lease_token": lease_token, "retryable": False,
+                            "error": "security: agent output contains credential-like data in "
+                                     + ", ".join(f"{f['file']} ({'/'.join(f['kinds'])})" for f in findings)[:900]},
+                           **{"Idempotency-Key": f"fail:{lease_token}"})
+                self._discard_local(job_dir)
+                return {"job_id": job_id, "phase": phase, "failed": "leak_guard", "findings": findings}
             report = self._report(job_dir, job_id, phase, lease_token, result)
-            if self.cleanup_local and report["job_state"] in FINISHED_STATES:
-                # The backend keeps the snapshot and deliverables; nothing of the job stays on this machine.
-                shutil.rmtree(job_dir, ignore_errors=True)
-                shutil.rmtree(job_dir.parent / f"{job_dir.name}._uploads", ignore_errors=True)
+            self._purge_codex_traces(job_dir)
+            if self.cleanup_local:
+                # The backend holds the snapshot; keep at most one customer's data on this machine at a time.
+                self._discard_local(job_dir)
         except (PhaseNotReady, PhaseError) as exc:
             stop.set()
             self._post(f"/api/worker/jobs/{job_id}/fail", {"lease_token": lease_token, "error": str(exc), "retryable": False},
@@ -184,6 +210,28 @@ class ApiWorker:
         finally:
             stop.set()
         return {"job_id": job_id, "phase": phase, **report}
+
+    @staticmethod
+    def _discard_local(job_dir: Path) -> None:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        shutil.rmtree(job_dir.parent / f"{job_dir.name}._uploads", ignore_errors=True)
+
+    def _purge_codex_traces(self, job_dir: Path) -> None:
+        """Delete this job's Codex rollouts and generated images after the phase is reported.
+
+        Provenance was already verified from them and recorded (hashes) in the job directory.
+        """
+        from autoppt_service.codex_exec import find_rollout, load_profiles
+
+        profiles = {profile.name: profile for profile in load_profiles(self.profiles)}
+        for record in read_jsonl(service_path(job_dir, "usage.jsonl")):
+            profile, thread = profiles.get(record.get("profile", "")), record.get("thread_id", "")
+            if profile is None or not thread or thread == "mock":
+                continue
+            rollout = find_rollout(profile, thread)
+            if rollout is not None:
+                rollout.unlink(missing_ok=True)
+            shutil.rmtree(profile.home() / "generated_images" / thread, ignore_errors=True)
 
     def _heartbeat(self, job_id: str, lease_token: str, stop: threading.Event) -> None:
         while not stop.wait(self.heartbeat_s):
@@ -249,7 +297,12 @@ class ApiWorker:
         service_path(job_dir, ".snapshot-sha256").write_text(uploaded["sha256"])
         snapshot_id = uploaded["artifact_id"]
         usage = self._new_records(service_path(job_dir, "usage.jsonl"), service_path(job_dir, ".reported-usage"))
-        lessons = self._new_records(service_path(job_dir, "lesson-candidates.jsonl"), service_path(job_dir, ".reported-lessons"))
+        from autoppt_service.leakguard import sanitize_lesson
+
+        request = read_json(service_path(job_dir, "job-request.json")) or {}
+        terms = [*((request.get("cover") or {}).values()), *(f.get("name", "") for f in (request.get("inputs") or {}).get("files", []))]
+        lessons = [sanitize_lesson(lesson, terms) for lesson in
+                   self._new_records(service_path(job_dir, "lesson-candidates.jsonl"), service_path(job_dir, ".reported-lessons"))]
         report = {
             "lease_token": lease_token,
             "phase": phase,

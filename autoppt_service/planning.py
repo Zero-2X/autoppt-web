@@ -13,8 +13,10 @@ and writes ``workspace/presentation_handoff/deck-plan.json`` plus
    ``assets/slides/<slide_id>.png``;
 4. writes ``slide_brief.json`` and an outline preview for CP1.
 
-Codex runs with ``-s workspace-write`` and without ``--search``: it can write
-only inside the job directory and has no network or web search.
+Codex runs with ``-s workspace-write``, the restricted-token Windows sandbox
+(``windows.sandbox="unelevated"``, see ``codex_exec``) and without ``--search``:
+network and writes outside the job are blocked; reads are not (see
+``docs/security-model.md``), so outputs pass the leak guard before upload.
 """
 
 from __future__ import annotations

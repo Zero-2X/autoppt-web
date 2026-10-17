@@ -39,6 +39,8 @@ class Settings:
     # Enables the signed mock payment provider (development and tests only).
     payment_mock_secret: str = field(default_factory=lambda: _env("PAYMENT_MOCK_SECRET", ""))
     signup_bonus_expires_days: int | None = None
+    # Fernet key (urlsafe base64, 32 bytes) for encryption at rest; empty = plaintext (development only).
+    storage_key: str = field(default_factory=lambda: _env("STORAGE_KEY", ""))
 
     def __post_init__(self) -> None:
         if not self.secret_key:

@@ -2,7 +2,8 @@
 
 样例：虚构的硕士论文 docx（城市内涝预警，含 1 张结果表），`thesis_defense`、8–10 页、原生可编辑档、微软雅黑。
 账号：本机默认 `CODEX_HOME`（ChatGPT Plus，积分余额 0），Codex CLI 0.163.0，模型 `gpt-6-astra`（账号配置），
-沙箱 `-s workspace-write`，未开 `--search`。Worker 模板 `real-planning-20261017b`（源提交 `482e7c7`，有未提交改动）。
+沙箱 `-s workspace-write`，未开 `--search`。**更正（同日）：** 这次运行时本机配置为 `windows.sandbox = "elevated"` 且未完成安装，
+后来的探针证明这种状态下沙箱没有生效（可联网、可写任务目录外）；现在所有服务调用都强制 `unelevated`，见 [安全模型](security-model.md)。Worker 模板 `real-planning-20261017b`（源提交 `482e7c7`，有未提交改动）。
 任务目录 `D:/autoppt-jobs/J-plan-real-001`（仓库外，未入库）。
 
 ## 结果

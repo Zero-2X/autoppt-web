@@ -2,7 +2,7 @@
 // Every value from the server is inserted as text (never innerHTML), so
 // uploaded or generated content cannot inject markup.
 
-import { api, auth, ApiError, uploadFile } from "./api.js";
+import { api, auth, ApiError, setAccessReason, uploadFile } from "./api.js";
 import { lang, setLang, stateLabel, t } from "./i18n.js";
 
 // ---------------------------------------------------------------- tiny DOM helpers
@@ -570,7 +570,15 @@ async function pageJob(jobId) {
     return job;
   }
 
-  await draw();
+  try {
+    await draw();
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 403 && String(error.message).includes("X-Access-Reason")) {
+      const reason = prompt("查看其他用户的任务需要填写原因（会记入审计日志）：");
+      if (reason && reason.trim()) { setAccessReason(jobId, reason.trim()); return pageJob(jobId); }
+    }
+    throw error;
+  }
   await refreshEvents();
   pollTimer = setInterval(async () => {
     try { if ((await refreshEvents()) > 0) { await draw(); me = null; await renderNav(); } } catch { /* keep polling */ }

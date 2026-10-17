@@ -141,9 +141,13 @@ def test_full_native_job_with_three_checkpoints(api, world):
     assert cp3["editability_scope"]
     side = [p["path"] for p in cp3["previews"] if p["kind"] == "side_by_side"]
     # An administrator can never approve CP3 on the user's behalf.
-    admin_try = api.post(f"/api/jobs/{job['id']}/checkpoint/{cp3['checkpoint_id']}/response",
-                         json={"decision": "approve", "user_reply": "ok", "reviewed_previews": side}, headers=world["admin"])
-    assert admin_try.status_code == 422
+    admin_body = {"decision": "approve", "user_reply": "ok", "reviewed_previews": side}
+    url = f"/api/jobs/{job['id']}/checkpoint/{cp3['checkpoint_id']}/response"
+    assert api.post(url, json=admin_body, headers=world["admin"]).status_code == 403  # no access reason
+    admin_try = api.post(url, json=admin_body, headers={**world["admin"], "X-Access-Reason": "support ticket 42"})
+    assert admin_try.status_code == 422  # even with a reason, an admin never approves CP3
+    audit = api.get("/api/admin/audit", headers=world["admin"]).json()
+    assert any(a["action"] == "admin.access_job" and a["data"]["reason"] == "support ticket 42" for a in audit)
     api.post(f"/api/jobs/{job['id']}/checkpoint/{cp3['checkpoint_id']}/response",
              json={"decision": "approve", "user_reply": "接受预览中的非文字差异，优先真实可编辑", "reviewed_previews": side},
              headers=user)
