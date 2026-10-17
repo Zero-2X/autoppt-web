@@ -246,6 +246,30 @@ def submit_response(job_dir: Path, response: dict[str, Any], *, free_rounds: int
     return payload
 
 
+def withdraw_checkpoint(job_dir: Path, *, reason: str, audit_errors: list[str]) -> dict[str, Any]:
+    """The Worker retracts an open checkpoint whose preview failed a gate (never a user decision).
+
+    The record says ``responder: "system"`` and keeps the audit errors; it is archived like an
+    answered checkpoint so the next round counts it, and it can never approve anything.
+    """
+    checkpoint = pending_checkpoint(job_dir)
+    if checkpoint is None:
+        raise CheckpointError(["no open checkpoint to withdraw"])
+    response = {
+        "schema_version": RESPONSE_SCHEMA,
+        "checkpoint_id": checkpoint["checkpoint_id"],
+        "decision": "withdrawn",
+        "responder": "system",
+        "user_reply": "",
+        "reason": reason,
+        "audit_errors": list(audit_errors),
+        "answered_at": utc_now(),
+    }
+    write_json_atomic(service_path(job_dir, "checkpoint-response.json"), response)
+    close_checkpoint(job_dir)
+    return response
+
+
 def close_checkpoint(job_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     """Archive the answered checkpoint; return ``(checkpoint, response)``."""
     checkpoint_path = service_path(job_dir, "checkpoint.json")

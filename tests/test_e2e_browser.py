@@ -55,7 +55,7 @@ def live(tmp_path):
 
     def work() -> None:
         with httpx.Client(base_url=base, timeout=60) as client:
-            worker = ApiWorker(client, token, tmp_path / "worker", mock=True, heartbeat_s=3600)
+            worker = ApiWorker(client, token, tmp_path / "worker", mock=True, heartbeat_s=3600, min_free_gb=0)
             while not stop.is_set():
                 if worker.run_once() is None:
                     time.sleep(0.5)

@@ -79,7 +79,7 @@ def world(api):
     api.post("/api/admin/credits/adjust", json={"email": "student@example.com", "credits": 500, "memo": "beta"},
              headers={**admin, "Idempotency-Key": "beta-1"})
     sha = upload(api, user, "论文.docx", docx_bytes())
-    mock_worker = ApiWorker(api, worker["token"], api.tmp / "worker-jobs", mock=True, heartbeat_s=3600)
+    mock_worker = ApiWorker(api, worker["token"], api.tmp / "worker-jobs", mock=True, heartbeat_s=3600, min_free_gb=0)
     return {"admin": admin, "user": user, "worker": mock_worker, "worker_token": worker["token"], "sha": sha}
 
 

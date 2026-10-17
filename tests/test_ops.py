@@ -29,7 +29,7 @@ def test_capabilities_follow_failed_checks():
 
 
 def test_self_check_runs_on_this_machine(tmp_path):
-    report = run_checks(jobs_root=tmp_path, include_office=False)
+    report = run_checks(jobs_root=tmp_path, include_office=False, min_free_gb=0)
     names = {c["name"] for c in report["checks"]}
     assert {"python>=3.11", "python packages", "codex cli >= 0.163.0", "worker template"} <= names
     assert "codex" not in report["capabilities"]  # no template given
@@ -146,7 +146,7 @@ def test_worker_crash_mid_phase_is_recovered_by_another_worker_without_double_ch
         session.get(Job, job["id"]).lease_expires_at = now() - timedelta(seconds=1)
         session.commit()
     second = api.post("/api/admin/workers", json={"name": "b", "capabilities": ["all"]}, headers=admin).json()
-    worker_b = ApiWorker(api, second["token"], tmp_path / "machine-b", mock=True, heartbeat_s=3600)
+    worker_b = ApiWorker(api, second["token"], tmp_path / "machine-b", mock=True, heartbeat_s=3600, min_free_gb=0)
     result = worker_b.run_once()  # fresh machine: restores the intake snapshot, then plans
     assert result["phase"] == "planning" and result["job_state"] == "cp1_outline"
     assert not (tmp_path / "machine-b" / job["id"]).exists()  # nothing of the job stays on the machine after reporting

@@ -68,10 +68,36 @@ def _walk(shapes):
             yield shape
 
 
+_PUNCT = re.compile(r"[\s，。、：；！？,.:;!?（）()“”\"'《》【】\[\]—\-~·]+")
+
+
+def _letters(text: str) -> str:
+    return _PUNCT.sub("", str(text))
+
+
+def stale_lines(lines: Sequence[str], picture_text: str) -> list[str]:
+    """Reviewed lines still visible in a background picture (the old lettering was not removed)."""
+    seen = _letters(picture_text)
+    stale = []
+    for line in lines:
+        target = _letters(line)
+        if len(target) < 4:
+            continue
+        window = 6 if len(target) >= 8 else len(target)
+        if target in seen or any(target[i:i + window] in seen for i in range(0, len(target) - window + 1, 2)):
+            stale.append(line)
+    return stale
+
+
 def audit_pptx(
-    pptx_path: Path, targets: dict[str, list[str]], *, slide_ids: Sequence[str], require_chart: bool
+    pptx_path: Path, targets: dict[str, list[str]], *, slide_ids: Sequence[str], require_chart: bool,
+    ocr: Callable[[Path, Path], dict[str, Any]] | None = None, work_dir: Path | None = None,
 ) -> tuple[list[str], list[str], dict[str, Any]]:
-    """Return ``(errors, warnings, editability_scope)`` for the delivered deck."""
+    """Return ``(errors, warnings, editability_scope)`` for the delivered deck.
+
+    With ``ocr``, every large picture is read and a slide fails when reviewed text is still
+    visible in it (stale lettering under the native text, measured on the first real run).
+    """
     from pptx import Presentation
     from pptx.enum.shapes import MSO_SHAPE_TYPE
 
@@ -91,6 +117,7 @@ def audit_pptx(
     for slide_id, slide in zip(slide_ids, slides):
         text_parts: list[str] = []
         pictures = []
+        large_pictures = []
         fonts: set[str] = set()
         for shape in _walk(slide.shapes):
             if shape.has_text_frame and shape.text_frame.text.strip():
@@ -102,7 +129,10 @@ def audit_pptx(
                             fonts.add(run.font.name.lower())
             elif shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
                 counts["pictures"] += 1
-                pictures.append(float(shape.width) * float(shape.height) / area)
+                share = float(shape.width) * float(shape.height) / area
+                pictures.append(share)
+                if share >= 0.3:
+                    large_pictures.append(shape)
             elif getattr(shape, "has_chart", False) and shape.has_chart:
                 counts["charts"] += 1
                 if shape.chart.part.chart_workbook.xlsx_part is not None:
@@ -122,10 +152,28 @@ def audit_pptx(
             warnings.append(f"{slide_id}: {len(pictures)} pictures cover most of the slide (raster tiling: disclose as mixed)")
         if any(p >= 0.9 for p in pictures):
             warnings.append(f"{slide_id}: a full-slide picture is used as background; it must contain no stale lettering")
+        if ocr is not None and large_pictures and targets.get(slide_id):
+            folder = Path(work_dir or Path(pptx_path).parent) / "stale-check"
+            folder.mkdir(parents=True, exist_ok=True)
+            picture_text = []
+            for index, picture in enumerate(large_pictures):
+                image_path = folder / f"{slide_id}-{index}.{picture.image.ext}"
+                image_path.write_bytes(picture.image.blob)
+                result = ocr(image_path, folder / f"{slide_id}-{index}.json")
+                picture_text += [line.get("text", "") for line in result.get("lines", [])]
+            from autoppt_service.vectorize import join_cjk
+
+            stale = stale_lines(targets[slide_id], join_cjk(" ".join(picture_text)))
+            if stale:
+                errors.append(f"{slide_id}: the background picture still shows the old text under the native text "
+                              "(remove it from the picture): " + " | ".join(s[:30] for s in stale[:6]))
         odd_fonts = sorted(f for f in fonts if f not in OFFICE_FONTS and not f.startswith("+"))
         if odd_fonts:
             warnings.append(f"{slide_id}: fonts outside the accepted Office families: {', '.join(odd_fonts)}")
         per_slide.append({"slide_id": slide_id, "native_text_boxes": len(text_parts), "pictures": len(pictures)})
+    if slides and counts["shapes"] == 0 and all(s["pictures"] for s in per_slide):
+        errors.append("the deck has no native shapes: cards, panels, lines, arrows and simple diagrams must be native "
+                      "PowerPoint shapes, not part of a background picture (v66 quality floor)")
     if require_chart and charts_with_workbook == 0:
         errors.append("the order has chart data but the deck has no native chart with an embedded workbook")
     scope = {
@@ -191,8 +239,12 @@ def run_reconstruct_agent(
     budgets: dict[str, int] | None = None,
     command: Sequence[str] | None = None,
     reasoning_effort: str | None = None,
+    ocr: Callable[[Path, Path], dict[str, Any]] | None = None,
+    initial_issues: Sequence[str] = (),
 ) -> dict[str, Any]:
     budgets = {**DEFAULT_BUDGETS, **(budgets or {})}
+    if ocr is None and __import__("os").name == "nt":
+        from autoppt_service.vectorize import windows_ocr as ocr  # noqa: N813 - stale-lettering check
     check = verify_template(template)
     if not check["matching"]:
         raise ReconstructBlocked([f"worker template {check['version']} was modified after it was built"])
@@ -206,7 +258,7 @@ def run_reconstruct_agent(
     require_chart = request["delivery"].get("charts") == "native_with_workbook" and bool(chart_data.get("tables")) \
         and request.get("service") != "vectorize"
     pool = ProfilePool(profiles)
-    issues: list[str] = []
+    issues: list[str] = list(initial_issues)  # e.g. the audit errors of a withdrawn preview
     attempts: list[dict[str, Any]] = []
     retry_hint: str | None = None
     for attempt in range(1, budgets["reconstruct_attempts"] + 1):
@@ -244,7 +296,8 @@ def run_reconstruct_agent(
         if not (job_dir / DECK).is_file():
             issues = [f"{DECK} was not written"]
             continue
-        errors, warnings, scope = audit_pptx(job_dir / DECK, targets, slide_ids=slide_ids, require_chart=require_chart)
+        errors, warnings, scope = audit_pptx(job_dir / DECK, targets, slide_ids=slide_ids, require_chart=require_chart,
+                                             ocr=ocr, work_dir=job_dir / "workspace" / "reconstruct")
         outcome["errors"] = errors
         if errors:
             issues = errors

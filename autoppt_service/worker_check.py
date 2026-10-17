@@ -150,8 +150,9 @@ def run_checks(
     jobs_root: Path = Path("."),
     include_office: bool = True,
     extra: Sequence[Callable[[], dict[str, Any]]] = (),
+    min_free_gb: float = MIN_FREE_GB,
 ) -> dict[str, Any]:
-    checks = [*check_python(), check_disk(jobs_root), *check_codex(template, profiles)]
+    checks = [*check_python(), check_disk(jobs_root, min_free_gb), *check_codex(template, profiles)]
     if include_office:
         checks += check_office()
     checks.append(check_node())

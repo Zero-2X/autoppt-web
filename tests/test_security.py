@@ -75,7 +75,7 @@ def test_worker_refuses_to_upload_leaked_output(api, world, tmp_path, monkeypatc
         return result
 
     monkeypatch.setattr(client_module, "run_phase", leaking_run_phase)
-    worker = ApiWorker(api, world["worker_token"], tmp_path / "jobs", mock=True, profiles=profiles, heartbeat_s=3600)
+    worker = ApiWorker(api, world["worker_token"], tmp_path / "jobs", mock=True, profiles=profiles, heartbeat_s=3600, min_free_gb=0)
     job = api.post("/api/jobs", json={"request": request_body(world["sha"], "planning_package")}, headers=world["user"]).json()
     total = api.post(f"/api/jobs/{job['id']}/estimate", headers=world["user"]).json()["total"]
     api.post(f"/api/jobs/{job['id']}/submit", json={"confirm_total": total}, headers=world["user"])
@@ -131,7 +131,7 @@ def test_codex_traces_are_purged_after_reporting(tmp_path):
     job = tmp_path / "job"
     (job / "service").mkdir(parents=True)
     (job / "service/usage.jsonl").write_text(json.dumps({"profile": "p", "thread_id": "thread-abc"}) + "\n", encoding="utf-8")
-    ApiWorker(None, "t", tmp_path, profiles=profiles)._purge_codex_traces(job)
+    ApiWorker(None, "t", tmp_path, profiles=profiles, min_free_gb=0)._purge_codex_traces(job)
     assert not rollout.exists() and not images.exists() and other.exists()  # only this job's threads
 
 

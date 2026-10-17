@@ -179,7 +179,8 @@ def test_audit_rules(tmp_path):
     path = tmp_path / "deck.pptx"
     deck.save(path)
     errors, warnings, scope = audit_pptx(path, {"S01": ["标题"]}, slide_ids=["S01"], require_chart=True)
-    assert errors == ["the order has chart data but the deck has no native chart with an embedded workbook"]
+    assert errors[-1] == "the order has chart data but the deck has no native chart with an embedded workbook"
+    assert "no native shapes" in errors[0]  # every slide is pictures plus text
     assert any("raster tiling" in w for w in warnings) and any("arial" in w for w in warnings)
     chart_slide = deck.slides.add_slide(deck.slide_layouts[6])
     data = CategoryChartData()
@@ -191,3 +192,47 @@ def test_audit_rules(tmp_path):
     assert errors == [] and scope["charts_with_workbook"] == 1 and "图表" in scope["native"]
     errors, _, _ = audit_pptx(path, {}, slide_ids=["S01"], require_chart=False)
     assert errors and "2 slides in the deck but 1 masters" in errors[0]
+
+
+def test_stale_lettering_and_missing_shapes_fail_the_audit(tmp_path):
+    from pptx import Presentation
+    from pptx.util import Emu, Inches
+
+    from autoppt_service.reconstruct import stale_lines
+
+    assert stale_lines(["去掉管网约束后误报率上升到 0.26", "本文方法"], "误报率上升到 0.26") == ["去掉管网约束后误报率上升到 0.26"]
+    assert stale_lines(["本文方法"], "完全不同的文字") == []
+    background = tmp_path / "bg.png"
+    Image.new("RGB", (160, 90), "white").save(background)
+    deck = Presentation()
+    deck.slide_width, deck.slide_height = Emu(12192000), Emu(6858000)
+    slide = deck.slides.add_slide(deck.slide_layouts[6])
+    slide.shapes.add_picture(str(background), 0, 0, deck.slide_width, deck.slide_height)
+    box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1))
+    box.text_frame.text = "对比与消融结果：本文方法精度更高"
+    path = tmp_path / "deck.pptx"
+    deck.save(path)
+
+    def ocr(image, out_json):  # the background still carries the title lettering
+        return {"lines": [{"text": "对 比 与 消 融 结 果 ： 本 文 方 法 精 度 更 高"}]}
+
+    errors, _, _ = audit_pptx(path, {"S01": ["对比与消融结果：本文方法精度更高"]}, slide_ids=["S01"], require_chart=False,
+                              ocr=ocr, work_dir=tmp_path / "w")
+    assert any("still shows the old text" in e for e in errors)
+    assert any("no native shapes" in e for e in errors)
+
+
+def test_withdrawn_preview_sends_audit_errors_not_user_words(job_at_reconstruct):
+    from autoppt_service.checkpoint import closed_checkpoints
+    from autoppt_service.run_job import withdraw_native_preview
+
+    job = job_at_reconstruct["job"]
+    job_at_reconstruct["reconstruct"]()
+    state = withdraw_native_preview(job, ["S01: the background picture still shows the old text"], reason="stale lettering")
+    assert state["state"] == "reconstructing"
+    checkpoint, response = closed_checkpoints(job)[-1]
+    assert response["decision"] == "withdrawn" and response["responder"] == "system" and response["user_reply"] == ""
+    result = job_at_reconstruct["reconstruct"]()
+    assert result["job_state"] == "cp3_native_preview" and pending_checkpoint(job)["round"] == 2
+    prompt = sorted(job_at_reconstruct["home"].glob("prompt-*.txt"))[-1].read_text(encoding="utf-8")
+    assert "still shows the old text" in prompt and "<<<USER_REPLY" not in prompt

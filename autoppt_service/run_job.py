@@ -106,10 +106,23 @@ def apply_answered_checkpoint(job_dir: Path) -> tuple[dict[str, Any], dict[str, 
         raise PhaseError(f"answered checkpoint {checkpoint['checkpoint_id']} but job is in {state['state']}")
     if response["decision"] == "approve" or state["state"] == "cp_v_text":
         target = next_state(state)
-    else:
+    else:  # revise, redo_slides, or a preview the Worker withdrew
         target = REWORK_TARGET[state["state"]]
     save_job_state(job_dir, transition(state, target, reason=f"{checkpoint['checkpoint_id']}: {response['decision']}"))
     return checkpoint, response
+
+
+def withdraw_native_preview(job_dir: Path, audit_errors: list[str], *, reason: str) -> dict[str, Any]:
+    """Retract an open CP3 whose deck fails the audit and send the job back to reconstruction."""
+    from autoppt_service.checkpoint import withdraw_checkpoint
+
+    state = load_job_state(job_dir)
+    if state is None or state["state"] != "cp3_native_preview":
+        raise PhaseError("no open native preview to withdraw")
+    withdraw_checkpoint(job_dir, reason=reason, audit_errors=audit_errors)
+    state = transition(state, "reconstructing", reason=f"preview withdrawn by the worker: {reason}"[:300])
+    save_job_state(job_dir, state)
+    return state
 
 
 def resume_blocked(job_dir: Path, *, reason: str = "resumed by operator") -> dict[str, Any]:
@@ -513,13 +526,15 @@ def _real_reconstruct(
     template = _resolve_template(template)
     round_no = _round(job_dir, "native_preview")
     previous = _last_response(job_dir, "native_preview")
-    revision = previous if previous and previous["decision"] == "revise" else None
+    # Only the user's own words are passed as user feedback; a withdrawn preview passes its audit errors.
+    revision = previous if previous and previous["decision"] == "revise" and previous.get("responder") == "user" else None
+    initial_issues = previous.get("audit_errors", []) if previous and previous["decision"] == "withdrawn" else []
     with phase_timer(job_dir, "reconstruct", round=round_no):
         try:
             report = run_reconstruct_agent(
                 job_dir, job_id=job_id, template=template, profiles=load_profiles(profiles_path),
                 renderer=renderer or powerpoint_renderer, round_no=round_no, revision=revision,
-                command=command, reasoning_effort=reasoning_effort,
+                command=command, reasoning_effort=reasoning_effort, initial_issues=initial_issues,
             )
         except ReconstructDeferred as exc:
             write_json_atomic(service_path(job_dir, "deferred.json"),
