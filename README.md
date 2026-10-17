@@ -16,6 +16,16 @@ AutoPPT 的网页服务：用户购买积分，提交资料和需求，后台用
 | `autoppt_service/codex_imagegen_step.py` | 母版生成：每页一个线程，调用内置 `image_gen` |
 | `autoppt_service/provenance.py` | 从 rollout 校验 `exec-` 出图记录并写来源 sidecar |
 | `autoppt_service/repo_paths.py` | 定位只读的 `autoppt` 仓库 |
+| `autoppt_service/export_options.py` | 场景、风格和表单选项导出为前端 JSON |
+| `autoppt_service/job_request.py` | `autoppt-job-request-v1` 的 JSON Schema 与表单规则校验 |
+| `autoppt_service/parsers/` | 上传文件解析（PDF/PPTX/DOCX/XLSX/CSV/MD/TXT/TEX/图片/ZIP），输出 source manifest |
+| `autoppt_service/intake.py` | 需求 + 上传 → 任务目录（证据台账、规划简报、任务状态） |
+| `autoppt_service/status.py` | 任务状态机（`service/job-state.json`）与代理进度文件（`service/status.json`） |
+| `autoppt_service/checkpoint.py` | 检查点与用户回答文件，CP3 必须由用户本人批准 |
+| `autoppt_service/acceptance.py` | CP3 批准 → 验收记录（与原仓库验收记录同字段） |
+| `autoppt_service/previews.py` | 缩略图、联系表、母版/原生并排图、差异热图 |
+| `autoppt_service/usage.py` | token、Office 时长、阶段耗时记录与汇总 |
+| `autoppt_service/run_job.py` | 按阶段运行任务；`--mock` 可跑通全流程 |
 
 ## 运行
 
@@ -26,6 +36,12 @@ python -m pip install -r requirements.txt -r ../autoppt/requirements.txt
 python -m pytest -q
 $env:AUTOPPT_CODEX_BIN = "<path to codex.exe 0.163.0+>"
 python -m autoppt_service.codex_imagegen_step <job>/image-prompts.json --profiles profiles.json
+```
+
+不接 Codex 和 Office 跑通全流程（结构验证用，产物全部标为 mock）：
+
+```powershell
+python -m autoppt_service.run_job req.json --job-dir D:\jobs\J001 --job-id J001 --uploads uploads.json --phase all --mock --auto-respond
 ```
 
 任务目录要放在两个仓库之外，避免 Codex 加载仓库根目录的 `AGENTS.md`。不要使用 `codex exec --ephemeral`：

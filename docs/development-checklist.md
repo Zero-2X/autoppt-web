@@ -327,16 +327,17 @@ draft → estimated → paid(积分冻结) → queued → intake → planning
 - [x] 新建 `autoppt_service/` 包；已完成 `codex_exec.py`（账号目录、轮换、无头执行、用量记录）
 - [x] Codex 出图步骤 `codex_imagegen_step.py`：每页一个独立线程，按 rollout 校验 `exec-` 来源，强制提示词原样传递，失败重试
 - [x] 服务侧 `provenance.py` 校验 `exec-` 来源记录（原仓库不改；原版门禁普通模式可接受，含测试）
-- [ ] 在 `autoppt_service/` 中继续补充以下模块（下文的 `service/…` 路径都指任务目录里的 `service/` 子目录）：
-  - [ ] `job_request.py`：`autoppt-job-request-v1` 的 JSON Schema 和校验
-  - [ ] `intake.py`：根据需求和文件生成主题目录（`workspace/presentation_handoff/`、`evidence_workspace/` 等，结构见 `references/project-integration.md`）
-  - [ ] 新增解析器：PDF（含 OCR）、PPTX、XLSX/CSV、MD/TXT、图片、ZIP；输出统一的 source manifest 和证据条目
-  - [ ] `status.py`：约定代理写入 `service/status.json`（阶段、进度、当前页、警告），由 Worker 监听
-  - [ ] `checkpoint.py`：约定代理在检查点写入 `service/checkpoint.json`（类型、预览文件列表、需要用户回答的问题）后停止；用户回答写入 `service/checkpoint-response.json`
-  - [ ] `previews.py`：生成网页预览，包括缩略图、联系表、母版与成品并排对比图、差异热图（复用 Office 渲染结果）
-  - [ ] `acceptance.py`：把 CP3 的用户回复转成验收记录 JSON
-  - [ ] `usage.py`：记录 token、费用、Office 占用分钟数和各阶段耗时
-  - [ ] `export_options.py`：把场景和风格档案导出成前端可用的 JSON（含中文名、适用场景、默认页数范围）
+- [x] 在 `autoppt_service/` 中继续补充以下模块（下文的 `service/…` 路径都指任务目录里的 `service/` 子目录；任务目录布局见 `jobfiles.py`）：
+  - [x] `job_request.py`：`autoppt-job-request-v1` 的 JSON Schema 和校验（§3.3 规则：无文档时描述 ≥200 字、页数 ≤30、原生版强制 CP3 与 Office 字体、深色/极简须主动选择、Logo 须确认权属）
+  - [x] `intake.py`：根据需求和文件生成主题目录：`source-materials/`、`workspace/evidence_workspace/`（source manifest、`evidence-ledger.json`、图表数据）、`workspace/presentation_handoff/planning-brief.{json,md}`；任务目录不能放在两个仓库内；上传被拒时进入 `blocked`，替换后可重跑
+  - [x] 新增解析器（`parsers/`）：PDF、PPTX、DOCX（复用原仓库抽取器）、XLSX/CSV、MD/TXT/TEX、图片、ZIP（防路径穿越和压缩炸弹）；输出统一的 source manifest 和证据条目
+    - [ ] OCR 本身未实现：无文字层的 PDF 页只进入 `ocr_queue`；HEIC 需要先转码；PDF 表格未抽取
+  - [x] `status.py`：代理写 `service/status.json`（阶段、进度、当前页、警告、blocked 原因），Worker 用 `StatusWatcher` 监听；Worker 自己维护 `service/job-state.json`（§5 状态机，按档位和检查点生成阶段计划，校验每次转移）
+  - [x] `checkpoint.py`：代理写 `service/checkpoint.json` 后停止；用户回答写 `service/checkpoint-response.json`（CP3 只能由用户本人回答且必须附原话和所看预览；CP2 重做须列页码；超出免费轮次须确认扣费）；回答后归档到 `service/checkpoints/<id>/`
+  - [x] `previews.py`：缩略图、联系表、母版与成品并排对比图、差异热图和差异指标（只读已有图片，不渲染；指标仅供参考，不作门禁）
+  - [x] `acceptance.py`：把 CP3 的用户回复转成与 `zhicang-native-acceptance.json` 同字段的验收记录 `service/acceptance.json`
+  - [x] `usage.py`：记录 token、Office 占用时长和各阶段耗时（`service/usage.jsonl`，兼容出图步骤的记录），按阶段汇总，可按输入的单价估算费用
+  - [x] `export_options.py`：把场景和风格档案导出成前端可用的 JSON（含中文名、适用场景、默认页数范围）；不提供官方来源的学校风格原型
 - [ ] 编写服务模式指令 `SERVICE_AGENTS.md`，作为任务目录里的 `AGENTS.md` 供 `codex exec` 读取：
   - [ ] 保留经验闭环（读台账、风格手册、生产经验、v66 基准），去掉智仓兴教专属的续跑段落
   - [ ] 禁止直接向用户提问，只能通过检查点文件交互
@@ -347,9 +348,11 @@ draft → estimated → paid(积分冻结) → queued → intake → planning
       经脱敏的 `improvement/`、必要的 `docs/`，把 skill 安装到每个账号的 `CODEX_HOME/skills/`；**排除**
       `deliverables/`、`reviews/`、`runs/`、`交付/`、`智搬小匠_*`、`.tmp/`、根目录的大 PPTX
 - [ ] 本地命令 `python -m autoppt_service.run_job <job-request.json> --phase planning|masters|reconstruct|package`，在一台 Windows 机器上用 `codex exec` 依次跑完各阶段（masters 阶段直接调用已完成的出图步骤），检查点之间人工写入回复
+  - [x] 命令、阶段驱动、`--respond` 写入回复、`--mock` 全流程已完成；真实路线已接通 intake、masters（读任务根目录的 `image-prompts.json`）和图片版打包（调用原仓库 `build_image_deck.py`）
+  - [ ] 真实 planning 和 reconstruct 依赖 `SERVICE_AGENTS.md` 与 Office Worker，目前返回“未就绪”（退出码 3）
 - [ ] 准备 3–5 份脱敏样例（论文答辩、国自然申请、组会报告、纯描述无文档、矢量化），逐份实跑
 - [ ] 记录每份样例的耗时、费用、轮数、失败点，据此定价和设定各阶段预算
-- [ ] 给新模块补 pytest 用例；`--mock` 路径跑通全流程（供后端联调）
+- [x] 给新模块补 pytest 用例；`--mock` 路径跑通全流程（供后端联调）：`python -m autoppt_service.run_job req.json --job-dir <dir> --job-id J1 --uploads uploads.json --phase all --mock --auto-respond`
 
 **验收**：至少 3 份样例在无人值守下跑到 CP3，产物通过现有门禁（不通过的地方照实记录）；
 得到单页成本与时长的实测表；mock 全流程可以在 CI 里跑。

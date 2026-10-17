@@ -1,6 +1,7 @@
 # Service-only dependencies; the read-only autoppt repository has its own requirements.txt.
-# Intake (job_request, parsers) imports these directly:
+# Intake, parsers and previews import these directly:
 jsonschema
+numpy
 openpyxl
 Pillow
 pypdf
