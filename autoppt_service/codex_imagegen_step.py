@@ -45,8 +45,9 @@ def build_agent_prompt(slide_prompt: str, *, retry_note: str = "") -> str:
     lines = [
         "You are the image step of an automated presentation pipeline.",
         "Call the built-in image generation tool (image_gen) exactly once.",
-        "Pass the text between the markers below as the prompt, character for character:",
-        "do not translate, shorten, summarise, reword, or add to it.",
+        f"The prompt is exactly the lines between the line {PROMPT_OPEN} and the line {PROMPT_CLOSE}.",
+        "Those two marker lines are not part of the prompt: never pass them to the tool.",
+        "Pass the prompt character for character: do not translate, shorten, summarise, reword, or add to it.",
         "Do not draw the image with code, do not use any API key or external service,",
         "and do not run shell commands. After the tool returns, reply only with: done",
     ]
@@ -201,7 +202,11 @@ def generate_masters(
                 break
             if outcome.get("rate_limited"):
                 pool.rest(profile)
-            if any(issue.startswith("host_record_prompt_mismatch") for issue in outcome["issues"]):
+            mismatches = [issue for issue in outcome["issues"] if issue.startswith("host_record_prompt_mismatch")]
+            if any(issue.endswith(":marker_included") for issue in mismatches):
+                retry_note = (f"The previous attempt passed a marker line ({PROMPT_CLOSE}) to the tool. Pass only the lines "
+                              "strictly between the two marker lines, without either marker.")
+            elif mismatches:
                 retry_note = "The previous attempt changed the prompt text. Copy it exactly this time."
         status = "generated" if attempts and attempts[-1]["status"] == "generated" else "blocked"
         report_slides.append({"slide_id": slide_id, "status": status, "attempts": attempts})

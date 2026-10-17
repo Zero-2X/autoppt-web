@@ -31,6 +31,10 @@ if mode == "rate_limit":
     sys.exit(1)
 if mode == "paraphrase" or (mode == "paraphrase_once" and calls == 1):
     slide_prompt = "A plain slide."
+if mode == "marker_once" and calls == 1:
+    slide_prompt = slide_prompt + chr(10) + "SLIDE_PROMPT>>>"  # seen with real 5,000-character prompts
+if mode == "marker_once" and calls == 2:
+    assert "passed a marker line" in prompt, "retry must name the marker problem"
 records = 2 if mode == "two_calls" else 1
 lines = []
 for _ in range(records):
@@ -119,7 +123,7 @@ def test_generate_masters_retries_after_paraphrased_prompt(tmp_path: Path, monke
     workspace = tmp_path / "job"
     report = generate_masters(_prompts(workspace, 1), profiles=_profiles(tmp_path, "a"), command=_fake_command(tmp_path))
     attempts = report["slides"][0]["attempts"]
-    assert "host_record_prompt_mismatch:S01" in attempts[0]["issues"]
+    assert "host_record_prompt_mismatch:S01:different" in attempts[0]["issues"]
     assert attempts[1]["status"] == "generated"
     second_prompt = (workspace / "service" / "codex-runs" / "S01-attempt2" / "prompt.txt").read_bytes()
     assert b"Copy it exactly this time" in second_prompt
@@ -160,3 +164,12 @@ def test_profile_pool_skips_resting_profiles(tmp_path: Path) -> None:
     assert pool.acquire() == b
     pool.rest(b)
     assert pool.acquire() is None
+
+
+def test_marker_included_is_rejected_and_the_retry_names_the_cause(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("FAKE_CODEX_MODE", "marker_once")
+    workspace = tmp_path / "job"
+    report = generate_masters(_prompts(workspace, 1), profiles=_profiles(tmp_path, "a"), command=_fake_command(tmp_path))
+    attempts = report["slides"][0]["attempts"]
+    assert attempts[0]["status"] == "failed" and attempts[0]["issues"] == ["host_record_prompt_mismatch:S01:marker_included"]
+    assert attempts[1]["status"] == "generated" and report["handoff_verdict"] == "pass"

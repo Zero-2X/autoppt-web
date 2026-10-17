@@ -94,11 +94,26 @@ def completed_host_records(rollout: Path) -> list[tuple[int, dict[str, Any]]]:
     ]
 
 
+ACCEPTED_PROMPT_MATCHES = ("exact", "normalized")
+_MARKERS = ("<<<SLIDE_PROMPT", "SLIDE_PROMPT>>>")
+
+
 def prompt_match(expected: str, actual: str) -> str:
+    """``exact`` / ``normalized`` are accepted; anything else is a mismatch with a named cause.
+
+    ``marker_included`` (measured 2026-10-17 with 5,000-character prompts): the agent passed the
+    prompt verbatim plus a marker line.  Still rejected, because the image model saw the marker
+    text and might render it, but the retry can tell the agent exactly what went wrong.
+    """
     if actual == expected:
         return "exact"
     if " ".join(actual.split()) == " ".join(expected.split()):
         return "normalized"
+    stripped = actual
+    for marker in _MARKERS:
+        stripped = stripped.replace(marker, "")
+    if stripped != actual and " ".join(stripped.split()) == " ".join(expected.split()):
+        return "marker_included"
     return "different"
 
 
@@ -168,8 +183,8 @@ def ingest_host_record(
         raise HostRecordBlocked([f"host_result_not_png:{slide_id}"])
     evidence, issues = _host_evidence(record, image_bytes, rollout)
     match = prompt_match(str(target.get("prompt") or ""), record["revised_prompt"])
-    if require_prompt_match and match == "different":
-        issues.append(f"host_record_prompt_mismatch:{slide_id}")
+    if require_prompt_match and match not in ACCEPTED_PROMPT_MATCHES:
+        issues.append(f"host_record_prompt_mismatch:{slide_id}:{match}")
     if issues:
         raise HostRecordBlocked(issues)
 

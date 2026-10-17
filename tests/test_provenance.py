@@ -98,7 +98,7 @@ def test_ingest_blocks_record_from_another_thread(tmp_path: Path) -> None:
 def test_ingest_blocks_paraphrased_prompt_unless_relaxed(tmp_path: Path) -> None:
     handoff = _handoff(tmp_path)
     rollout = _rollout(tmp_path, prompt="A plain slide.")
-    assert _issues(handoff, rollout) == ["host_record_prompt_mismatch:S01"]
+    assert _issues(handoff, rollout) == ["host_record_prompt_mismatch:S01:different"]
     assert ingest_host_record(handoff, "S01", rollout=rollout, record_index=0, require_prompt_match=False)["prompt_match"] == "different"
 
 
