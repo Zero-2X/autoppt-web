@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # Windows, like the workers (paths, PowerShell, Office-free tests only).
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      AUTOPPT_REPO: ${{ github.workspace }}\autoppt
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      # The workflow repository is private and read-only for this service.
+      # Add a repository secret AUTOPPT_REPO_TOKEN (fine-grained token with read access to Zero-2X/autoppt).
+      - name: Check out the workflow repository
+        uses: actions/checkout@v4
+        with:
+          repository: Zero-2X/autoppt
+          token: ${{ secrets.AUTOPPT_REPO_TOKEN }}
+          path: autoppt
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r autoppt/requirements.txt playwright
+          python -m playwright install chromium
+
+      - name: Unit, integration, mock end-to-end and browser tests
+        run: python -m pytest -q
+
+      - name: Skill portability (workflow repository and a freshly built worker template)
+        run: |
+          python -B autoppt/autopptskills/scripts/validate_skill_portability.py
+          python -m autoppt_service.worker_template build --out "$env:RUNNER_TEMP\templates" --version ci
+          python -B autoppt/autopptskills/scripts/validate_skill_portability.py "$env:RUNNER_TEMP\templates\ci\autopptskills"
+
+      - name: Mock job through the CLI
+        run: |
+          $job = "$env:RUNNER_TEMP\ci-job"
+          python -c "import json; from docx import Document; d=Document(); d.add_heading('研究背景',1); d.add_paragraph('城市内涝预警需要街区级结果。'); d.save(r'$env:RUNNER_TEMP\paper.docx'); json.dump({'schema_version':'autoppt-job-request-v1','service':'new_deck','inputs':{'files':[{'file_id':'f_01','role':'primary_source','name':'paper.docx'}],'description':'x'},'scenario':'thesis_defense','slides':{'mode':'fixed','count':4},'cover':{'title':'CI'},'delivery':{'tier':'native_editable','font_policy':'office_native_yahei'}}, open(r'$env:RUNNER_TEMP\req.json','w',encoding='utf-8')); json.dump({'f_01': r'$env:RUNNER_TEMP\paper.docx'}, open(r'$env:RUNNER_TEMP\uploads.json','w'))"
+          python -m autoppt_service.run_job "$env:RUNNER_TEMP\req.json" --job-dir $job --job-id CI --uploads "$env:RUNNER_TEMP\uploads.json" --phase all --mock --auto-respond
+          python -c "import json,sys; s=json.load(open(sys.argv[1],encoding='utf-8')); assert s['state']=='delivered', s['state']; print('delivered')" "$job\service\job-state.json"

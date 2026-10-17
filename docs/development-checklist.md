@@ -521,15 +521,19 @@ CP3 管理员不能代批）、取消、系统失败退款、可重试失败退�
 
 ### P8 测试与内测上线
 
-- [ ] CI：现有 `pytest -q` 加新模块测试，加 `validate_skill_portability.py`，加 mock 端到端测试
+上线前需要人来完成的事项见 [launch-checklist.md](launch-checklist.md)。
+
+- [x] CI：现有 `pytest -q` 加新模块测试，加 `validate_skill_portability.py`，加 mock 端到端测试（`.github/workflows/ci.yml`，Windows 运行；
+      需要先在仓库里添加 `AUTOPPT_REPO_TOKEN` secret 才能拉取私有的工作流仓库，未添加前 CI 会失败）
 - [ ] 金标准样例集：P1 的样例加上真实内测件（经用户授权），每次升级 Worker 模板都回归跑一遍，
-      对比质量、耗时和费用
-- [ ] 前端端到端测试（例如 Playwright），覆盖下单、三个检查点和下载
-- [ ] 计费专项测试（见 P4）
+      对比质量、耗时和费用（工具 `scripts/run_samples.py` 已写好，结果按模板版本记录；样例集还没准备）
+- [x] 前端端到端测试（例如 Playwright），覆盖下单、三个检查点和下载（`tests/test_e2e_browser.py`：真实后端 + mock Worker + 无头 Chromium，45 秒）
+- [x] 计费专项测试（见 P4）
 - [ ] 内测：10–20 名用户，免费额度，收集每单满意度和返修原因，回填定价和默认参数
-- [ ] 上线清单：合规材料、用户协议、客服渠道、退款流程、监控值班
+- [ ] 上线清单：合规材料、用户协议、客服渠道、退款流程、监控值班（清单已列出，需负责人完成）
 
 **验收**：内测订单的交付率、平均返修轮次、单单毛利达到预先设定的目标。
+**2026-10-17 状态**：未开始内测。
 
 ---
 

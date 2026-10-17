@@ -6,6 +6,7 @@ AutoPPT 的网页服务：用户购买积分，提交资料和需求，后台用
 通过 `AUTOPPT_REPO` 指定它的位置（默认是同级目录 `../autoppt`）。
 
 - 开发清单：[docs/development-checklist.md](docs/development-checklist.md)
+- 上线清单：[docs/launch-checklist.md](docs/launch-checklist.md)；安全模型与实测：[docs/security-model.md](docs/security-model.md)
 - P0 实测（Codex 无人值守出图）：[docs/p0-codex-imagegen-probe.md](docs/p0-codex-imagegen-probe.md)
 
 ## 现状
