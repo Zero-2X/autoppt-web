@@ -24,6 +24,21 @@ DEFAULT_RULES: dict[str, Any] = {
     "redo_slide": 4,
     "extra_round": 5,
     "free_rounds": 2,
+    # Credit packages (price in CNY cents) and the value of one credit for margin reports.
+    "packages": [
+        {"id": "p100", "credits": 100, "price_cents": 3000, "label": "100 积分"},
+        {"id": "p300", "credits": 300, "price_cents": 8500, "label": "300 积分"},
+        {"id": "p1000", "credits": 1000, "price_cents": 26000, "label": "1000 积分"},
+    ],
+    "credit_value_cents": 28,
+    # Cost side of the margin report (CNY cents).  Codex account-pool tokens are a fixed cost: 0 per token.
+    "cost_rates": {
+        "input_per_million_cents": 0,
+        "cached_input_per_million_cents": 0,
+        "output_per_million_cents": 0,
+        "office_minute_cents": 5,
+        "storage_gb_month_cents": 15,
+    },
 }
 
 

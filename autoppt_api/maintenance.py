@@ -1,6 +1,6 @@
 """Periodic jobs: send notifications, purge expired data, check the ledger.
 
-    python -m autoppt_api.maintenance notify|purge|ledger|all
+    python -m autoppt_api.maintenance notify|purge|expire|reconcile|ledger|all
 
 Run from a scheduler (cron / Windows Task Scheduler) every few minutes.
 Notifications go through SMTP when ``AUTOPPT_API_SMTP_URL`` is set
@@ -85,7 +85,7 @@ def send_notifications(session: Session, smtp_url: str, *, sender: str = "AutoPP
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("task", choices=["notify", "purge", "ledger", "all"])
+    parser.add_argument("task", choices=["notify", "purge", "expire", "reconcile", "ledger", "all"])
     args = parser.parse_args(argv)
     settings = Settings()
     engine = make_engine(settings.database_url)
@@ -97,10 +97,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             result["notified"] = send_notifications(session, settings.smtp_url)
         if args.task in ("purge", "all"):
             result["purged_jobs"] = purge_expired(session, LocalStorage(settings.storage_dir))
+        if args.task in ("expire", "all"):
+            result["expired_lots"] = ledger.expire_lots(session)
+        if args.task in ("reconcile", "all"):
+            from autoppt_api.payments import reconcile
+
+            result["reconcile"] = reconcile(session)
         if args.task in ("ledger", "all"):
             result["ledger_issues"] = ledger.check_ledger(session)
     sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
-    return 1 if result.get("ledger_issues") else 0
+    return 1 if result.get("ledger_issues") or not result.get("reconcile", {"ok": True})["ok"] else 0
 
 
 if __name__ == "__main__":

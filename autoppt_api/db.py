@@ -20,14 +20,21 @@ def make_engine(url: str) -> Engine:
             from pathlib import Path
 
             Path(url.split(":///", 1)[1]).parent.mkdir(parents=True, exist_ok=True)
-        engine = create_engine(url, connect_args={"check_same_thread": False})
+        engine = create_engine(url, connect_args={"check_same_thread": False, "timeout": 30})
 
         @event.listens_for(engine, "connect")
         def _sqlite_pragmas(connection, _record):  # pragma: no cover - driver hook
+            connection.isolation_level = None  # let SQLAlchemy's begin event issue BEGIN itself
             cursor = connection.cursor()
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.close()
+
+        @event.listens_for(engine, "begin")
+        def _sqlite_begin(connection):  # pragma: no cover - driver hook
+            # Take the write lock up front: two requests can never both read a balance
+            # and then both freeze it (PostgreSQL uses SELECT ... FOR UPDATE instead).
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
 
         return engine
     return create_engine(url, pool_pre_ping=True)

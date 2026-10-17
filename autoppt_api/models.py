@@ -121,6 +121,19 @@ class CreditHold(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class CreditLot(Base):
+    """Credits that expire (grants, promotional redeem codes); spent before non-expiring credits."""
+
+    __tablename__ = "credit_lots"
+    id: Mapped[str] = _id()
+    account_id: Mapped[str] = mapped_column(ForeignKey("credit_accounts.id"), index=True)
+    transaction_id: Mapped[str] = mapped_column(ForeignKey("credit_transactions.id"))
+    amount: Mapped[int] = mapped_column(BigInteger)
+    remaining: Mapped[int] = mapped_column(BigInteger)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = _created()
+
+
 class Order(Base):
     __tablename__ = "orders"
     id: Mapped[str] = _id()
@@ -129,7 +142,11 @@ class Order(Base):
     credits: Mapped[int] = mapped_column(BigInteger)
     amount_cents: Mapped[int] = mapped_column(BigInteger)
     currency: Mapped[str] = mapped_column(String(3), default="CNY")
-    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending | paid | refunded | cancelled
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending | paid | refunded | expired
+    provider: Mapped[str] = mapped_column(String(24), default="")
+    provider_ref: Mapped[str] = mapped_column(String(128), default="")
+    refunded_credits: Mapped[int] = mapped_column(BigInteger, default=0)
+    refunded_cents: Mapped[int] = mapped_column(BigInteger, default=0)
     created_at: Mapped[datetime] = _created()
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -144,7 +161,7 @@ class Payment(Base):
     amount_cents: Mapped[int] = mapped_column(BigInteger)
     raw: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = _created()
-    __table_args__ = (UniqueConstraint("provider", "provider_ref", name="uq_payment_provider_ref"),)
+    __table_args__ = (UniqueConstraint("provider", "provider_ref", "status", name="uq_payment_provider_ref_status"),)
 
 
 class RedeemCode(Base):
@@ -157,6 +174,7 @@ class RedeemCode(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     note: Mapped[str] = mapped_column(String(200), default="")
     created_by: Mapped[str] = mapped_column(String(32), default="")
+    credit_expires_days: Mapped[int | None] = mapped_column(Integer, nullable=True)  # credits from this code expire
     created_at: Mapped[datetime] = _created()
 
 

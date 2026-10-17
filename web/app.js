@@ -667,9 +667,27 @@ function nativeReview(cp, send, extraRound) {
 
 async function pageCredits() {
   const data = await api.get("/api/credits");
+  const shop = await api.get("/api/packages");
+  const orders = await api.get("/api/orders");
   const code = h("input", { placeholder: "XXXX-XXXX-XXXX-XXXX" });
   const status = h("div");
+  const orderStatus = { pending: "待支付", paid: "已支付", refunded: "已退款", expired: "已过期" };
+  const buy = async (pkg) => {
+    try {
+      const order = await api.post("/api/orders", { package: pkg.id, provider: shop.providers[0] });
+      fill(status, notice(`订单已创建（${(order.amount_cents / 100).toFixed(2)} 元）：${order.payment.instructions || "请按支付页面提示完成支付"}`));
+    } catch (error) { fill(status, errorBox(error)); }
+  };
   return h("div", { class: "stack" },
+    card("积分包",
+      shop.providers.length ? null : notice("在线支付尚未开通（测试期）：请使用兑换码或联系管理员充值。", "warn"),
+      h("div", { class: "grid three" }, shop.packages.map((pkg) => h("div", { class: "tile" },
+        h("strong", { class: "big" }, pkg.label || `${pkg.credits} 积分`),
+        h("p", { class: "muted" }, `${(pkg.price_cents / 100).toFixed(2)} 元`),
+        h("button", { class: "primary", disabled: !shop.providers.length, onclick: () => buy(pkg) }, "购买"))))),
+    orders.length ? card("订单", h("table", { class: "table" }, h("tbody", {}, orders.map((o) => h("tr", {},
+      h("td", {}, fmtTime(o.created_at)), h("td", {}, `${o.credits} 积分`), h("td", {}, `${(o.amount_cents / 100).toFixed(2)} 元`),
+      h("td", {}, orderStatus[o.status] || o.status, o.refunded_credits ? `（已退 ${o.refunded_credits} 积分）` : "")))))) : null,
     card(t("credits"),
       h("div", { class: "grid three" },
         h("div", { class: "tile" }, h("small", {}, t("balance")), h("strong", { class: "big" }, data.balance)),

@@ -36,6 +36,9 @@ class Settings:
     smtp_url: str = field(default_factory=lambda: _env("SMTP_URL", ""))
     # Malware scanner run on every new upload, e.g. "clamdscan --no-summary" (exit 1 = infected).
     scan_command: str = field(default_factory=lambda: _env("SCAN_COMMAND", ""))
+    # Enables the signed mock payment provider (development and tests only).
+    payment_mock_secret: str = field(default_factory=lambda: _env("PAYMENT_MOCK_SECRET", ""))
+    signup_bonus_expires_days: int | None = None
 
     def __post_init__(self) -> None:
         if not self.secret_key:

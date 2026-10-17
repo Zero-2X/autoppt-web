@@ -12,13 +12,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from autoppt_api.models import CreditAccount, CreditEntry, CreditHold, CreditTransaction, now
+from autoppt_api.models import CreditAccount, CreditEntry, CreditHold, CreditLot, CreditTransaction, now
 
 SYSTEM_ACCOUNTS = ("revenue", "grants", "payments", "adjustments")
 
@@ -99,19 +99,59 @@ def post(
     for account, amount in lines:
         session.add(CreditEntry(transaction_id=transaction.id, account_id=account.id, amount=amount))
         account.balance += amount
+        if account.user_id is not None and amount < 0 and kind != "expire":
+            _consume_lots(session, account, -amount)
     session.flush()
     return transaction
 
 
+def _consume_lots(session: Session, account: CreditAccount, amount: int) -> None:
+    """Spend expiring credits first, earliest expiry first (in the user's favour)."""
+    for lot in session.scalars(
+        select(CreditLot).where(CreditLot.account_id == account.id, CreditLot.remaining > 0).order_by(CreditLot.expires_at)
+    ):
+        if amount <= 0:
+            break
+        used = min(lot.remaining, amount)
+        lot.remaining -= used
+        amount -= used
+
+
+def expire_lots(session: Session, *, at: datetime | None = None) -> list[dict]:
+    """Expire what is left of lapsed lots; frozen credits are never expired."""
+    at = at or now()
+    expired = []
+    for lot in session.scalars(select(CreditLot).where(CreditLot.remaining > 0)).all():
+        expires = lot.expires_at if lot.expires_at.tzinfo else lot.expires_at.replace(tzinfo=timezone.utc)
+        if expires > at:
+            continue
+        account = session.get(CreditAccount, lot.account_id)
+        amount = min(lot.remaining, max(available(session, account), 0))
+        lot.remaining = 0
+        if amount > 0:
+            post(session, kind="expire", business_key=f"expire:{lot.id}", memo="credits expired",
+                 entries=[(account, -amount), (system_account(session, "grants"), amount)])
+        expired.append({"lot": lot.id, "account": account.id, "expired": amount})
+    session.flush()
+    return expired
+
+
 def credit_user(
-    session: Session, user_id: str, credits: int, *, kind: str, business_key: str, source: str, memo: str = "", actor: str = "system"
+    session: Session, user_id: str, credits: int, *, kind: str, business_key: str, source: str, memo: str = "",
+    actor: str = "system", expires_in_days: int | None = None,
 ) -> CreditTransaction:
     """Top-up (source ``payments``), grant/redeem (``grants``) or admin adjustment (``adjustments``)."""
     if credits <= 0:
         raise LedgerError("credits must be positive")
     account = user_account(session, user_id, lock=True)
-    return post(session, kind=kind, business_key=business_key, memo=memo, actor=actor,
-                entries=[(system_account(session, source), -credits), (account, credits)])
+    existing = session.scalars(select(CreditTransaction).where(CreditTransaction.business_key == business_key)).first()
+    transaction = post(session, kind=kind, business_key=business_key, memo=memo, actor=actor,
+                       entries=[(system_account(session, source), -credits), (account, credits)])
+    if expires_in_days and existing is None:
+        session.add(CreditLot(account_id=account.id, transaction_id=transaction.id, amount=credits, remaining=credits,
+                              expires_at=now() + timedelta(days=expires_in_days)))
+        session.flush()
+    return transaction
 
 
 def debit_user(

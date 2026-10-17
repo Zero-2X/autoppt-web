@@ -159,6 +159,7 @@ class PhaseReport(BaseModel):
     template_version: str = ""
     usage: list[dict[str, Any]] = []
     lesson_candidates: list[dict[str, Any]] = []
+    slides: int | None = None
 
 
 class FailReport(BaseModel):
@@ -178,7 +179,13 @@ class RedeemCodesBody(BaseModel):
     count: int = Field(default=1, ge=1, le=500)
     max_uses: int = Field(default=1, ge=1)
     expires_days: int | None = Field(default=None, ge=1)
+    credit_expires_days: int | None = Field(default=None, ge=1)
     note: str = ""
+
+
+class OrderBody(BaseModel):
+    package: str
+    provider: str = "mock"
 
 
 class WorkerBody(BaseModel):
@@ -372,7 +379,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ledger.user_account(session, user.id)
             if settings.signup_bonus_credits > 0:
                 ledger.credit_user(session, user.id, settings.signup_bonus_credits, kind="grant",
-                                   business_key=f"signup:{user.id}", source="grants", memo="signup bonus")
+                                   business_key=f"signup:{user.id}", source="grants", memo="signup bonus",
+                                   expires_in_days=settings.signup_bonus_expires_days)
             audit(session, "user", user.id, "user.signup", user.id)
         if user.status != "active":
             raise HTTPException(403, "account disabled")
@@ -427,9 +435,72 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if code.uses >= code.max_uses:
                 raise HTTPException(409, "code fully used")
             code.uses += 1
-        ledger.credit_user(session, user.id, code.credits, kind="redeem", business_key=key, source="grants", memo=code.note)
+        ledger.credit_user(session, user.id, code.credits, kind="redeem", business_key=key, source="grants", memo=code.note,
+                           expires_in_days=code.credit_expires_days)
         account = ledger.user_account(session, user.id)
         return {"credited": code.credits, "balance": account.balance}
+
+    # ------------------------------------------------------------ packages, orders, payments
+
+    from autoppt_api import payments as payments_module
+    from autoppt_api.models import Order
+
+    providers = payments_module.providers_from_settings(settings)
+    app.state.payment_providers = providers
+
+    def provider_for(name: str):
+        if name not in providers:
+            raise HTTPException(404, f"payment provider {name} is not enabled")
+        return providers[name]
+
+    @app.get("/api/packages")
+    def list_packages(session: Session = Depends(db)) -> dict[str, Any]:
+        return {"packages": payments_module.packages(session), "providers": sorted(providers)}
+
+    @app.post("/api/orders")
+    def new_order(body: OrderBody, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+        order, instructions = payments_module.create_order(session, user, body.package, provider_for(body.provider))
+        return {"order_id": order.id, "credits": order.credits, "amount_cents": order.amount_cents, "currency": order.currency,
+                "status": order.status, "payment": instructions}
+
+    @app.get("/api/orders")
+    def my_orders(user: User = Depends(current_user), session: Session = Depends(db)) -> list[dict[str, Any]]:
+        return [{"id": o.id, "package": o.package, "credits": o.credits, "amount_cents": o.amount_cents, "currency": o.currency,
+                 "status": o.status, "refunded_credits": o.refunded_credits, "refunded_cents": o.refunded_cents,
+                 "created_at": iso(o.created_at), "paid_at": iso(o.paid_at)}
+                for o in session.scalars(select(Order).where(Order.user_id == user.id).order_by(Order.created_at.desc()))]
+
+    @app.post("/api/payments/{provider_name}/callback")
+    async def payment_callback(provider_name: str, request: Request) -> dict[str, Any]:
+        provider = provider_for(provider_name)
+        body = await request.body()
+        event = provider.parse_callback({k.lower(): v for k, v in request.headers.items()}, body)
+        with factory() as session:
+            try:
+                result = payments_module.handle_callback(session, provider, event)
+            except ServiceError:
+                session.commit()  # keep the audit record of a rejected callback
+                raise
+            session.commit()
+        return result
+
+    @app.post("/api/admin/orders/{order_id}/refund")
+    def admin_refund(order_id: str, admin: User = Depends(admin_user), session: Session = Depends(db)) -> dict[str, Any]:
+        order = session.get(Order, order_id)
+        if order is None:
+            raise HTTPException(404, "order not found")
+        return payments_module.refund_order(session, order, provider_for(order.provider), actor=admin.id)
+
+    @app.post("/api/admin/reconcile")
+    def admin_reconcile(_admin: User = Depends(admin_user), session: Session = Depends(db)) -> dict[str, Any]:
+        return payments_module.reconcile(session)
+
+    @app.get("/api/admin/reports/margin")
+    def admin_margin(days: int = Query(30, ge=1, le=366), _admin: User = Depends(admin_user),
+                     session: Session = Depends(db)) -> dict[str, Any]:
+        from autoppt_api.reports import margin_report
+
+        return margin_report(session, days=days)
 
     # ------------------------------------------------------------ uploads and downloads
 
@@ -565,6 +636,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def stream(job_id: str, after: int = 0, timeout: float = Query(25.0, ge=0, le=300), user: User = Depends(current_user),
                session: Session = Depends(db)) -> StreamingResponse:
         own_job(job_id, user, session)
+        session.commit()  # release the request's lock before the long-lived stream polls with its own sessions
 
         def generate() -> Iterator[str]:
             last, deadline = after, time.monotonic() + timeout
@@ -648,23 +720,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.put("/api/worker/jobs/{job_id}/artifacts")
     async def worker_artifact(job_id: str, request: Request, kind: str = Query(pattern="^(preview|deliverable|snapshot|report)$"),
                               path: str = Query(min_length=1, max_length=300), lease_token: str = Query(...),
-                              worker: Worker = Depends(current_worker)) -> dict[str, Any]:
-        data = await request.body()
-        with factory() as session:
-            job = leased(job_id, worker, session)
-            from autoppt_api.services import require_lease
+                              worker: Worker = Depends(current_worker), session: Session = Depends(db)) -> dict[str, Any]:
+        # Same session as the worker lookup: a second session would wait on SQLite's write lock.
+        from autoppt_api.services import require_lease
 
-            require_lease(job, worker, lease_token)
-            if len(data) > settings.max_upload_bytes * 5:
-                raise HTTPException(413, "artifact too large")
-            sha, stored_path = storage.put_bytes(data)
-            if session.get(StoredFile, sha) is None:
-                session.add(StoredFile(sha256=sha, size=len(data), storage_key=storage.key_for(sha),
-                                       sniffed_kind=sniff_kind(data[:8192], stored_path), scan_status="worker_output"))
-                session.flush()
-            artifact = register_artifact(session, job, kind=kind, path=path, sha256=sha, size=len(data))
-            session.commit()
-            return {"artifact_id": artifact.id, "sha256": sha}
+        job = leased(job_id, worker, session)
+        require_lease(job, worker, lease_token)
+        data = await request.body()
+        if len(data) > settings.max_upload_bytes * 5:
+            raise HTTPException(413, "artifact too large")
+        sha, stored_path = storage.put_bytes(data)
+        if session.get(StoredFile, sha) is None:
+            session.add(StoredFile(sha256=sha, size=len(data), storage_key=storage.key_for(sha),
+                                   sniffed_kind=sniff_kind(data[:8192], stored_path), scan_status="worker_output"))
+            session.flush()
+        artifact = register_artifact(session, job, kind=kind, path=path, sha256=sha, size=len(data))
+        return {"artifact_id": artifact.id, "sha256": sha}
 
     @app.post("/api/worker/jobs/{job_id}/complete")
     def worker_complete(job_id: str, body: PhaseReport, worker: Worker = Depends(current_worker), session: Session = Depends(db),
@@ -713,7 +784,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         for _ in range(body.count):
             code = "-".join(secrets.token_hex(2).upper() for _ in range(4))
             session.add(RedeemCode(code_hash=hash_secret(code), credits=body.credits, max_uses=body.max_uses, note=body.note,
-                                   created_by=admin.id,
+                                   created_by=admin.id, credit_expires_days=body.credit_expires_days,
                                    expires_at=now() + timedelta(days=body.expires_days) if body.expires_days else None))
             codes.append(code)
         audit(session, "admin", admin.id, "redeem.create", "", count=body.count, credits=body.credits)

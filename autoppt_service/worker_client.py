@@ -240,9 +240,16 @@ class ApiWorker:
             "template_version": self.template_version,
             "usage": usage,
             "lesson_candidates": lessons,
+            "slides": self._slide_count(job_dir),
         }
         reply = self._post(f"/api/worker/jobs/{job_id}/complete", report, **{"Idempotency-Key": f"complete:{lease_token}"})
         return {"job_state": target, "backend": reply}
+
+    @staticmethod
+    def _slide_count(job_dir: Path) -> int | None:
+        """Slides actually planned; the backend settles per-slide phases on this, not on the estimate's maximum."""
+        brief = read_json(job_dir / "workspace" / "presentation_handoff" / "slide_brief.json")
+        return len(brief.get("slides", [])) if isinstance(brief, dict) and brief.get("slides") else None
 
     def run_forever(self, *, idle_sleep_s: float = 10.0) -> None:
         while True:

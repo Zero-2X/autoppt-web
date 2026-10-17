@@ -349,7 +349,7 @@ def complete_phase(session: Session, job: Job, worker: Worker, report: dict[str,
         phase_row.status, phase_row.finished_at = "done", now()
         phase_row.result = {k: v for k, v in report.items() if k not in ("usage", "lease_token")}
     if target != "blocked":
-        share = int(((job.estimate or {}).get("phases") or {}).get(phase, 0))
+        share = phase_share(job, phase, report.get("slides"))
         settled = ledger.settle(session, job.id, share, business_key=f"settle:{job.id}:{phase}", memo=f"{phase} done")
         if phase_row:
             phase_row.settled_credits = settled
@@ -379,6 +379,21 @@ def complete_phase(session: Session, job: Job, worker: Worker, report: dict[str,
     else:
         job.pending_phase = _pending_for(job, target)
     return job
+
+
+def phase_share(job: Job, phase: str, slides: int | None) -> int:
+    """Credits to settle for a finished phase.
+
+    Per-slide phases are charged for the slides actually planned, never more than the
+    estimate (which froze the upper end of the slide range); the rest of the hold is
+    released at delivery.
+    """
+    estimate = job.estimate or {}
+    share = int((estimate.get("phases") or {}).get(phase, 0))
+    hold_slides = int(estimate.get("slides_for_hold") or 0)
+    if phase in ("masters", "reconstruct") and slides and hold_slides:
+        share = share * min(int(slides), hold_slides) // hold_slides
+    return share
 
 
 def fail_phase(session: Session, job: Job, worker: Worker, *, lease_token: str, error: str, retryable: bool) -> Job:

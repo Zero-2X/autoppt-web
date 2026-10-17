@@ -404,3 +404,26 @@ def test_alembic_migration_matches_models(tmp_path, monkeypatch):
     config.set_main_option("script_location", str(root / "autoppt_api" / "migrations"))
     command.upgrade(config, "head")
     command.check(config)  # raises if the models drifted from the migrations
+
+
+def test_per_slide_phases_settle_actual_slides_not_the_frozen_maximum(api, world):
+    user, worker = world["user"], world["worker"]
+    body = request_body(world["sha"], "image_deck")
+    body["slides"] = {"mode": "range", "min": 8, "max": 16}  # mock planning picks the middle: 12 slides
+    job = api.post("/api/jobs", json={"request": body}, headers=user).json()
+    quote = api.post(f"/api/jobs/{job['id']}/estimate", headers=user).json()
+    assert quote["slides_for_hold"] == 16
+    before = credits(api, user)
+    api.post(f"/api/jobs/{job['id']}/submit", json={"confirm_total": quote["total"]}, headers=user)
+    worker.run_once(), worker.run_once()
+    for _ in range(2):
+        cp = api.get(f"/api/jobs/{job['id']}/checkpoint", headers=user).json()
+        api.post(f"/api/jobs/{job['id']}/checkpoint/{cp['checkpoint_id']}/response",
+                 json={"decision": "approve", "user_reply": "通过"}, headers=user)
+        assert worker.run_once()["job_state"] in ("cp2_masters", "delivered")
+    assert api.get(f"/api/jobs/{job['id']}", headers=user).json()["state"] == "delivered"
+    after = credits(api, user)
+    expected = quote["phases"]["planning"] + quote["phases"]["masters"] * 12 // 16
+    assert before["balance"] - after["balance"] == expected < quote["total"]
+    assert after["frozen"] == 0
+    ledger_ok(api)
