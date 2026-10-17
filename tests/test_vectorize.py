@@ -206,3 +206,22 @@ def test_cpv_corrections_flow_through_run_job(tmp_path):
     reviewed = read_json(job / "workspace/vectorize/reviewed-text.json")
     assert reviewed["slides"][0]["lines"][0]["text"] == "正确的标题"
     assert load_job_state(job)["state"] == "cp3_native_preview"
+
+
+def test_master_number_check_flags_derived_figures(tmp_path):
+    from autoppt_service.master_qa import check_master_numbers
+
+    job = tmp_path / "job"
+    write_json_atomic(job / "workspace/presentation_handoff/deck-plan.json", {"slides": [
+        {"slide_id": "S09", "exact_text": ["从 18 分钟提高到 47 分钟"]}]})
+    write_json_atomic(job / "workspace/evidence_workspace/evidence-ledger.json", {"evidence_items": [
+        {"fact_or_data": "测试只有 16 场降雨，其中特大暴雨仅 2 场"}]})
+    (job / "assets/slides").mkdir(parents=True)
+    Image.new("RGB", (100, 60)).save(job / "assets/slides/S09.png")
+
+    def ocr(image, out_json):
+        return {"lines": [{"text": "从 18 分 钟 提 高 到 47 分 钟"}, {"text": "提 升 2.6 倍"}, {"text": "16 场"}]}
+
+    findings = check_master_numbers(job, {"S09": job / "assets/slides/S09.png"}, ocr=ocr)
+    assert findings == ["S09: master shows numbers not in the plan or evidence: 2.6"]
+    assert read_json(job / "workspace/master-qa/numbers.json")["slides"][0]["unexpected"] == ["2.6"]

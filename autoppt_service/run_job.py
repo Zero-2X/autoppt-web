@@ -429,9 +429,14 @@ def phase_planning(
     return {"phase": "planning", "job_state": state["state"], "slides": len(slides)}
 
 
-def _masters_checkpoint(job_dir: Path, state: dict[str, Any], masters: dict[str, Path], *, mock: bool) -> dict[str, Any]:
+def _masters_checkpoint(
+    job_dir: Path, state: dict[str, Any], masters: dict[str, Path], *, mock: bool, findings: list[str] | None = None
+) -> dict[str, Any]:
     previews = build_master_previews(job_dir, masters)
     round_no = _round(job_dir, "masters")
+    summary = f"{len(masters)} masters" + (" (mock)" if mock else "")
+    if findings:
+        summary += "; please check: " + "; ".join(findings)
     return _checkpoint_or_advance(
         job_dir,
         state,
@@ -439,7 +444,7 @@ def _masters_checkpoint(job_dir: Path, state: dict[str, Any], masters: dict[str,
             "checkpoint_id": f"cp2-masters-r{round_no}",
             "type": "masters",
             "round": round_no,
-            "summary": f"{len(masters)} masters" + (" (mock)" if mock else ""),
+            "summary": summary[:4000],
             "previews": checkpoint_previews(previews),
             "questions": [{"question_id": "approve_masters", "text": "母版是否通过？需要重做的页请勾选并写原因。", "kind": "slides"}],
             "master_sha256": {slide_id: sha256_file(path) for slide_id, path in masters.items()},
@@ -484,7 +489,16 @@ def phase_masters(job_dir: Path, *, mock: bool, profiles_path: Path | None = Non
                 save_job_state(job_dir, state)
                 return {"phase": "masters", "job_state": state["state"], "issues": report["handoff_issues"]}
         masters = {sid: path for sid, path in discover_slides(job_dir / MASTERS_DIR).items()}
-        state = _masters_checkpoint(job_dir, state, masters, mock=mock)
+        findings: list[str] = []
+        if not mock and os.name == "nt":
+            from autoppt_service.master_qa import check_master_numbers
+            from autoppt_service.vectorize import VectorizeError, windows_ocr
+
+            try:
+                findings = check_master_numbers(job_dir, masters, ocr=windows_ocr)
+            except (VectorizeError, OSError, ValueError) as exc:
+                findings = [f"number check on masters did not run: {exc}"]
+        state = _masters_checkpoint(job_dir, state, masters, mock=mock, findings=findings)
     return {"phase": "masters", "job_state": state["state"], "masters": len(masters)}
 
 
