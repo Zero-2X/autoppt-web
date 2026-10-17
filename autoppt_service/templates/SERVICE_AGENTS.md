@@ -151,6 +151,13 @@ Rules the Worker checks before showing the plan to the user:
   emblems. Charts with data from `chart-data.json` are described as real
   charts with the table id.
 - `learning_context.files_read` lists the files from section 2 that you read.
+- Paid add-ons in the brief's `delivery.addons`: `speaker_notes` means every
+  slide gets `speaker_notes` (what to say, about the slide's speaking time, only
+  claims the slide's evidence supports); `anticipated_questions` means a
+  top-level `anticipated_questions` list of at least 8 items
+  `{"question", "answer_outline", "evidence_refs"}` that a committee would
+  plausibly ask, answered only from the evidence (say so when the answer is a
+  limitation).
 
 Do not write `image-prompts.json`, `deck-spec.json` or the checkpoint; the
 Worker builds them from your plan with the workflow's prompt builder. Finish

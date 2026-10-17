@@ -394,6 +394,14 @@ def phase_planning(
         slide_brief = {"deck_title": cover.get("title", "Mock deck"), "mock": True, "notice": MOCK_NOTICE, "slides": slides}
         brief_path = job_dir / HANDOFF_DIR / "slide_brief.json"
         write_json_atomic(brief_path, slide_brief)
+        # The mock writes a deck plan too, including add-on content, so packaging is exercised end to end.
+        write_json_atomic(job_dir / HANDOFF_DIR / "deck-plan.json", {
+            "schema_version": "autoppt-deck-plan-v1", "mock": True, "deck": {"title": slide_brief["deck_title"]},
+            "slides": [{"slide_id": s["slide_id"], "headline": s["title"], "exact_text": [s["title"]],
+                        "speaker_notes": f"[MOCK] {s['slide_id']} 讲稿"} for s in slides],
+            "anticipated_questions": [{"question": f"[MOCK] 预测问题 {i}", "answer_outline": "[MOCK] 回答要点", "evidence_refs": []}
+                                      for i in range(1, 9)],
+        })
         outline = job_dir / HANDOFF_DIR / "outline-preview.md"
         outline.write_text(
             "\n".join([f"# {slide_brief['deck_title']} (mock outline)", "", MOCK_NOTICE, ""]
@@ -627,6 +635,20 @@ def phase_package(job_dir: Path, *, job_id: str, mock: bool) -> dict[str, Any]:
                 acceptance.update(tier="mock-no-release-tier", mock=True, notice=MOCK_NOTICE)
                 write_json_atomic(service_path(job_dir, "acceptance.json"), acceptance)
             files.append(service_path(job_dir, "acceptance.json"))
+        addons = [name for name in ("speaker_notes", "anticipated_questions") if request["delivery"].get(name)]
+        if addons:
+            from autoppt_service.addons import add_notes_to_deck, write_addon_files
+
+            plan = read_json(job_dir / HANDOFF_DIR / "deck-plan.json")
+            if plan is None:
+                missing_addons = [job_dir / HANDOFF_DIR / "deck-plan.json"]
+            else:
+                missing_addons = []
+                files += write_addon_files(job_dir, plan, addons)
+                deck_path = next((f for f in files if f.suffix == ".pptx" and f.exists()), None)
+                if "speaker_notes" in addons and deck_path is not None:
+                    add_notes_to_deck(deck_path, plan)
+            files += missing_addons
         missing = [path for path in files if not path.exists()]
         if missing:
             state = transition(state, "blocked", reason="missing deliverables: " + ", ".join(relative_to_job(job_dir, p) for p in missing))

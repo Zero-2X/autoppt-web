@@ -237,3 +237,30 @@ def test_cli_respond_and_all(tmp_path, uploads, capsysbinary):
     assert load_job_state(job)["state"] == "delivered"
     with pytest.raises(PhaseError):
         run_job_main([*common, "--phase", "planning"])  # already delivered
+
+
+def test_paid_addons_are_delivered(tmp_path, uploads):
+    from pptx import Presentation
+
+    files, paths = uploads
+    request = make_request(files=files)
+    request["delivery"].update(speaker_notes=True, anticipated_questions=True)
+    job = tmp_path / "job"
+    run_all(job, job_id="J1", request=request, uploads=paths, auto_respond=True)
+    assert load_job_state(job)["state"] == "delivered"
+    manifest = read_json(job / "output/delivery-manifest.json")
+    paths_out = {item["path"] for item in manifest["files"]}
+    assert {"output/speaker-notes.md", "output/anticipated-questions.md"} <= paths_out
+    questions = (job / "output/anticipated-questions.md").read_text(encoding="utf-8")
+    assert questions.count("## ") == 8
+    deck = Presentation(str(job / "output/native-deck.pptx"))
+    assert deck.slides[0].notes_slide.notes_text_frame.text.startswith("[MOCK] S01")
+
+
+def test_planning_rejects_a_plan_without_ordered_addons():
+    from autoppt_service.addons import addon_errors
+
+    plan = {"slides": [{"slide_id": "S01", "speaker_notes": "讲稿"}, {"slide_id": "S02"}], "anticipated_questions": [{"question": "q"}]}
+    errors = addon_errors(plan, ["speaker_notes", "anticipated_questions"])
+    assert "S02" in errors[0] and "at least 8" in errors[1]
+    assert addon_errors(plan, []) == []

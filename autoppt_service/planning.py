@@ -191,6 +191,9 @@ def validate_deck_plan(plan: Any, brief: dict[str, Any], ledger: dict[str, Any],
             errors.append(f"must-include item “{item}” is not mapped in must_include_coverage")
         elif set(slides_for_item) - set(ids):
             errors.append(f"must_include_coverage for “{item}” names unknown slides")
+    from autoppt_service.addons import addon_errors
+
+    errors += addon_errors(plan, list((brief.get("delivery") or {}).get("addons", [])))
     used_assets = {asset for slide in slides for asset in slide.get("source_assets", [])}
     for keep in brief.get("keep_as_image", []):
         if keep["asset_id"] not in used_assets:
