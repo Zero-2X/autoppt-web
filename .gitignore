@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.env
+.env.*
+!.env.example
+# job workspaces, Codex homes and generated decks never belong in Git
+jobs/
+codex-homes/
+profiles.json
+*.pptx
+*.png
+*.jpg
+*.jpeg
+*.webp

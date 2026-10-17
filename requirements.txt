@@ -1,0 +1,2 @@
+# Service-only dependencies; the read-only autoppt repository has its own requirements.txt.
+pytest
