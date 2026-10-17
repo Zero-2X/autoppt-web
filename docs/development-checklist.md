@@ -460,13 +460,21 @@ CP3 管理员不能代批）、取消、系统失败退款、可重试失败退�
 
 - [ ] 按 D3 实现 `user_supplied_master` 来源类型（上传哈希、上传记录、层级命名），
       并同步更新 `SKILL.md`、门禁脚本和测试
-- [ ] 输入归一化：PPTX、PDF、图片统一转成冻结母版，并经 PowerPoint 渲染出坐标基准
-- [ ] OCR 后进入 CP-V 文字核对，生成已审核的精确文字清单
-- [ ] 选项：可编辑深度（文字 / 加形状 / 加图表）、照片保留为图片、页码选择
-- [ ] 复用原生重建与 Office 验收流程，经 CP3 批准后交付
-- [ ] 前端增加矢量化专用向导和文字核对界面
+  - [x] 服务侧实现（`autoppt_service/vectorize.py`）：用户页面冻结为母版，`assets/slides/user-supplied-masters.json` 记录来源文件、
+        页码、上传哈希和母版哈希，标注“不是 ImageGen 产物”；验收记录使用单独的层级名 `user-supplied-master-native-approved`
+  - [ ] `SKILL.md` 和门禁脚本：原仓库不能修改（用户要求），D3 也未拍板；在此之前工作流的 ImageGen-first 门禁不认这类母版
+- [x] 输入归一化：PPTX 用 PowerPoint 渲染（调用原仓库 `render_pptx_powerpoint.ps1`，只读使用，同一时间只跑一个 Office 任务），
+      PDF 栅格化（优先 pypdfium2；没有时用 PyMuPDF，**PyMuPDF 是 AGPL 许可，商用前需评估**），图片统一为 RGB PNG，宽度 1920
+  - 2026-10-17 本机实测：2 页中文 PPTX，PowerPoint 渲染 7.1 秒（1920×1080），Windows OCR 1.7 秒，文字全部识别正确
+- [x] OCR 后进入 CP-V 文字核对，生成已审核的精确文字清单（Windows OCR，`windows_ocr_layout.ps1`；
+      中文逐字空格已合并；用户逐行改正、删除、补充；`reviewed-text.json` 之后不再被 OCR 覆盖）
+- [x] 选项：可编辑深度（文字 / 加形状 / 加图表）、照片保留为图片、页码选择（`vectorize` 字段）；页数超过订单时任务暂停并说明
+- [ ] 复用原生重建与 Office 验收流程，经 CP3 批准后交付（流程已接通，mock 可跑通；真实的原生重建阶段还没有实现，同 P1）
+- [x] 前端增加矢量化专用向导和文字核对界面（向导第 ③ 步的矢量化选项；CP-V 页面左侧原页、右侧可编辑文字）
 
 **验收**：3 份外部图片版 PPT 跑到 CP3，验证结果和披露说明完整。
+**2026-10-17 状态**：mock 下矢量化任务可经 API 和 Worker 跑到交付（`tests/test_vectorize.py`、`tests/test_api.py`）；
+真实渲染和 OCR 已在本机实测。未达到验收：真实原生重建未实现，也没有外部样例。
 
 ### P6 Worker 集群与运维
 

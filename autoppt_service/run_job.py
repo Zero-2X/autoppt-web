@@ -97,6 +97,10 @@ def apply_answered_checkpoint(job_dir: Path) -> tuple[dict[str, Any], dict[str, 
     if not service_path(job_dir, "checkpoint-response.json").exists():
         return None
     checkpoint, response = close_checkpoint(job_dir)
+    if checkpoint["type"] == "vectorize_text":
+        from autoppt_service.vectorize import apply_text_review
+
+        apply_text_review(job_dir, response)
     state = load_job_state(job_dir)
     if state["state"] not in CHECKPOINT_STATES:
         raise PhaseError(f"answered checkpoint {checkpoint['checkpoint_id']} but job is in {state['state']}")
@@ -220,10 +224,60 @@ def _mock_native_deck(path: Path, slides: list[dict[str, Any]], aspect: str) -> 
 # ---------------------------------------------------------------- phases
 
 
-def phase_intake(job_dir: Path, *, job_id: str, request: dict[str, Any], uploads: dict[str, str]) -> dict[str, Any]:
+def phase_intake(
+    job_dir: Path, *, job_id: str, request: dict[str, Any], uploads: dict[str, str], mock: bool = False,
+    vectorize_runners: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     with phase_timer(job_dir, "intake"):
         report = run_intake(request, uploads, job_dir, job_id=job_id)
-    return {"phase": "intake", "status": report["status"], "job_state": report.get("job_state")}
+        state = load_job_state(job_dir)
+        if state and state["state"] == "cp_v_text":
+            _prepare_vectorize(job_dir, state, mock=mock, runners=vectorize_runners or {})
+            state = load_job_state(job_dir)
+    return {"phase": "intake", "status": report["status"], "job_state": state["state"] if state else report.get("job_state")}
+
+
+def _mock_render(pptx: Path, out_dir: Path) -> list[Path]:
+    from pptx import Presentation
+
+    count = len(Presentation(str(pptx)).slides)
+    paths = []
+    for index in range(1, count + 1):
+        target = out_dir / f"slide-{index}.png"
+        _mock_image(target, f"P{index:02d}", "MOCK render", aspect="16:9", tint=(60, 80, 100))
+        paths.append(target)
+    return paths
+
+
+def _mock_ocr(image: Path, out_json: Path) -> dict[str, Any]:
+    with Image.open(image) as picture:
+        width, height = picture.size
+    payload = {"width": width, "height": height, "lines": [
+        {"id": "line-000", "text": "[MOCK] 识别出的标题", "bbox": {"x": 60, "y": 30, "w": 600, "h": 50}},
+        {"id": "line-001", "text": "[MOCK] 识别出的正文", "bbox": {"x": 80, "y": 200, "w": 700, "h": 40}},
+    ]}
+    write_json_atomic(out_json, payload)
+    return payload
+
+
+def _prepare_vectorize(job_dir: Path, state: dict[str, Any], *, mock: bool, runners: dict[str, Any]) -> None:
+    """Vectorization: frozen user-supplied masters + OCR, then the CP-V text checkpoint."""
+    from autoppt_service import vectorize
+
+    request = read_json(service_path(job_dir, "job-request.json"))
+    options = request.get("vectorize") or {}
+    try:
+        masters = vectorize.prepare_masters(
+            job_dir,
+            renderer=runners.get("renderer") or (_mock_render if mock else vectorize.powerpoint_renderer),
+            pdf_rasterizer=runners.get("pdf") or vectorize.rasterize_pdf,
+            max_slides=(request.get("slides") or {}).get("count"),
+            page_spec=options.get("pages"),
+        )
+        vectorize.run_ocr(job_dir, masters, ocr=runners.get("ocr") or (_mock_ocr if mock else vectorize.windows_ocr))
+        open_checkpoint(job_dir, vectorize.checkpoint_payload(job_dir, masters, round_no=_round(job_dir, "vectorize_text")))
+    except (vectorize.VectorizeError, OSError, ValueError) as exc:
+        save_job_state(job_dir, transition(state, "blocked", reason=f"vectorize: {exc}"[:1000]))
 
 
 def _resolve_template(template: Path | None) -> Path:
@@ -424,7 +478,11 @@ def phase_reconstruct(job_dir: Path, *, mock: bool) -> dict[str, Any]:
     if not mock:
         raise PhaseNotReady("native reconstruction is not enabled yet (needs its SERVICE_AGENTS.md section and an Office worker)")
     request = read_json(service_path(job_dir, "job-request.json"))
-    slide_brief = read_json(job_dir / HANDOFF_DIR / "slide_brief.json") or {"slides": []}
+    slide_brief = read_json(job_dir / HANDOFF_DIR / "slide_brief.json")
+    if not slide_brief:
+        reviewed = read_json(job_dir / "workspace" / "vectorize" / "reviewed-text.json") or {"slides": []}
+        slide_brief = {"slides": [{"slide_id": s["slide_id"], "title": (s["lines"][0]["text"] if s["lines"] else s["slide_id"])}
+                                  for s in reviewed["slides"]]}
     masters = discover_slides(job_dir / MASTERS_DIR)
     aspect = request["delivery"]["aspect_ratio"]
     with phase_timer(job_dir, "reconstruct", mock=True):
@@ -477,11 +535,16 @@ def phase_package(job_dir: Path, *, job_id: str, mock: bool) -> dict[str, Any]:
     state = _enter(job_dir, "package")
     request = read_json(service_path(job_dir, "job-request.json"))
     tier = request["delivery"]["tier"]
-    files: list[Path] = [
-        job_dir / HANDOFF_DIR / "planning-brief.json",
-        job_dir / HANDOFF_DIR / "slide_brief.json",
-        job_dir / EVIDENCE_DIR / "evidence-ledger.json",
-    ]
+    if request["service"] == "vectorize":
+        # No planning step: the reviewed page text and the user-supplied master record are the evidence.
+        files: list[Path] = [job_dir / "workspace" / "vectorize" / "reviewed-text.json",
+                             job_dir / MASTERS_DIR / "user-supplied-masters.json"]
+    else:
+        files = [
+            job_dir / HANDOFF_DIR / "planning-brief.json",
+            job_dir / HANDOFF_DIR / "slide_brief.json",
+            job_dir / EVIDENCE_DIR / "evidence-ledger.json",
+        ]
     acceptance = None
     with phase_timer(job_dir, "package", mock=mock):
         if tier == "image_deck":
@@ -544,7 +607,7 @@ def run_phase(
     if phase == "intake":
         if request is None:
             raise PhaseError("intake needs the job request")
-        return phase_intake(job_dir, job_id=job_id, request=request, uploads=uploads or {})
+        return phase_intake(job_dir, job_id=job_id, request=request, uploads=uploads or {}, mock=mock)
     if phase == "planning":
         return phase_planning(
             job_dir, mock=mock, job_id=job_id, template=template, profiles_path=profiles_path,
@@ -572,7 +635,7 @@ def mock_auto_response(checkpoint: dict[str, Any]) -> dict[str, Any]:
 
 def run_all(job_dir: Path, *, job_id: str, request: dict[str, Any], uploads: dict[str, str], auto_respond: bool) -> list[dict[str, Any]]:
     """Mock driver: run phases in order until delivered or waiting for an answer."""
-    results = [run_phase(job_dir, "intake", job_id=job_id, request=request, uploads=uploads)]
+    results = [run_phase(job_dir, "intake", job_id=job_id, request=request, uploads=uploads, mock=True)]
     phase_for_state = {state: phase for phase, states in PHASE_STATES.items() for state in states}
     for _ in range(50):
         state = load_job_state(job_dir)["state"]

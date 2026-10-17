@@ -19,6 +19,8 @@ from autoppt_service.checkpoint import closed_checkpoints
 from autoppt_service.jobfiles import job_relative, read_json, service_path, sha256_file, write_json_atomic
 
 TIER = "native-priority-approved"
+# Vectorization reconstructs the user's own pages, not ImageGen masters (D3): a separate, disclosed tier.
+USER_MASTER_TIER = "user-supplied-master-native-approved"
 FONT_NAMES = {
     "office_native_yahei": "Microsoft YaHei",
     "office_native_dengxian": "DengXian",
@@ -92,7 +94,8 @@ def build_acceptance_record(
             "No approval for missing content, flattened ordinary diagrams, or other jobs."
         ),
         "master_sha256": master_set_sha256(masters),
-        "tier": TIER,
+        "tier": USER_MASTER_TIER if request.get("service") == "vectorize" else TIER,
+        "master_provenance": "user_supplied_master" if request.get("service") == "vectorize" else "builtin_image_gen",
         # Service extensions.
         "job_id": job_id,
         "checkpoint_id": checkpoint["checkpoint_id"],

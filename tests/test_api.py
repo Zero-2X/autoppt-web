@@ -427,3 +427,42 @@ def test_per_slide_phases_settle_actual_slides_not_the_frozen_maximum(api, world
     assert before["balance"] - after["balance"] == expected < quote["total"]
     assert after["frozen"] == 0
     ledger_ok(api)
+
+
+def test_vectorize_job_through_the_api(api, world):
+    from pptx import Presentation
+
+    user, worker = world["user"], world["worker"]
+    presentation = Presentation()
+    for _ in range(2):
+        presentation.slides.add_slide(presentation.slide_layouts[6])
+    buffer = io.BytesIO()
+    presentation.save(buffer)
+    sha = upload(api, user, "旧稿.pptx", buffer.getvalue())
+    body = {"schema_version": "autoppt-job-request-v1", "service": "vectorize",
+            "inputs": {"files": [{"file_id": "f_01", "role": "vectorize_source", "name": "旧稿.pptx", "sha256": sha}]},
+            "slides": {"mode": "fixed", "count": 2},
+            "delivery": {"tier": "native_editable", "font_policy": "office_native_yahei"}}
+    job = api.post("/api/jobs", json={"request": body}, headers=user).json()
+    quote = api.post(f"/api/jobs/{job['id']}/estimate", headers=user).json()
+    assert quote["phases"]["reconstruct"] == 2 * 12
+    api.post(f"/api/jobs/{job['id']}/submit", json={"confirm_total": quote["total"]}, headers=user)
+    assert worker.run_once()["job_state"] == "cp_v_text"
+    cpv = api.get(f"/api/jobs/{job['id']}/checkpoint", headers=user).json()
+    assert cpv["type"] == "vectorize_text" and any(p["kind"] == "document" for p in cpv["previews"])
+    api.post(f"/api/jobs/{job['id']}/checkpoint/{cpv['checkpoint_id']}/response",
+             json={"decision": "approve", "user_reply": "文字已核对", "answers": {"text_corrections": {"S01": {"line-000": "新标题"}}}},
+             headers=user)
+    assert worker.run_once()["job_state"] == "cp3_native_preview"
+    cp3 = api.get(f"/api/jobs/{job['id']}/checkpoint", headers=user).json()
+    side = [p["path"] for p in cp3["previews"] if p["kind"] == "side_by_side"]
+    api.post(f"/api/jobs/{job['id']}/checkpoint/{cp3['checkpoint_id']}/response",
+             json={"decision": "approve", "user_reply": "接受", "reviewed_previews": side}, headers=user)
+    assert worker.run_once()["job_state"] == "delivered"
+    detail = api.get(f"/api/jobs/{job['id']}", headers=user).json()
+    acceptance_url = next(d["url"] for d in detail["deliverables"] if d["path"] == "service/acceptance.json")
+    acceptance = api.get(acceptance_url).json()
+    assert acceptance["master_provenance"] == "user_supplied_master"
+    paths = {d["path"] for d in detail["deliverables"]}
+    assert "workspace/vectorize/reviewed-text.json" in paths
+    ledger_ok(api)

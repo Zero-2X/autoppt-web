@@ -257,6 +257,7 @@ function freshWizard(opts) {
     mustInclude: "", mustAvoid: "", charts: "native_with_workbook", fontAccepted: false, aspect: "16:9",
     outlineCheckpoint: true, masterCheckpoint: true, speakerNotes: false, questions: false,
     retention: 7, caseStudy: false, logoRights: false, deadline: "",
+    vecPages: "", vecDepth: "text_shapes_charts", vecKeepPhotos: true,
   };
 }
 
@@ -285,7 +286,11 @@ function buildRequest(w) {
     privacy: { retention_days: Number(w.retention), allow_case_study: w.caseStudy },
   };
   if (w.service === "new_deck") { request.scenario = w.scenario; request.slides = slides; }
-  else if (w.slidesCount) request.slides = { mode: "fixed", count: Number(w.slidesCount) };
+  else {
+    if (w.slidesCount) request.slides = { mode: "fixed", count: Number(w.slidesCount) };
+    request.vectorize = { depth: w.vecDepth, keep_photos_as_images: w.vecKeepPhotos };
+    if (w.vecPages.trim()) request.vectorize.pages = w.vecPages.trim();
+  }
   if (w.deadline) request.deadline = new Date(w.deadline).toISOString();
   return request;
 }
@@ -393,7 +398,16 @@ async function pageNewJob() {
           slides,
           field("演讲时长（分钟）", h("input", { type: "number", min: 1, max: 180, value: w.talkMinutes, oninput: (e) => set({ talkMinutes: e.target.value }) }),
             scenario ? `本场景约每页 ${scenario.default_duration_seconds} 秒` : null)),
-      ] : field("要转换的页数", h("input", { type: "number", min: 1, max: opts.limits.max_slides, value: w.slidesCount, oninput: (e) => set({ slidesCount: e.target.value }) })),
+      ] : h("div", { class: "stack" },
+        h("div", { class: "row" },
+          field("要转换的页数", h("input", { type: "number", min: 1, max: opts.limits.max_slides, value: w.slidesCount, oninput: (e) => set({ slidesCount: e.target.value }) })),
+          field("页码选择（可选）", h("input", { placeholder: "例如 1-5,8", value: w.vecPages, oninput: (e) => set({ vecPages: e.target.value }) }), "留空表示全部页"),
+          field("可编辑深度", select([
+            { id: "text", label: "只做文字" }, { id: "text_shapes", label: "文字 + 形状" }, { id: "text_shapes_charts", label: "文字 + 形状 + 图表" },
+          ], w.vecDepth, (v) => set({ vecDepth: v })))),
+        h("label", { class: "check" }, h("input", { type: "checkbox", checked: w.vecKeepPhotos, onchange: (e) => set({ vecKeepPhotos: e.target.checked }) }),
+          "照片和复杂插图保留为可移动的图片"),
+        notice("上传的页面会作为“用户提供的母版”冻结，不经过 AI 重绘；识别出的文字会先交给你核对。", "info")),
       h("h3", {}, "风格"),
       h("div", { class: "grid three" }, opts.styles.map((s) => h("button", {
         class: `choice ${w.style === s.id ? "selected" : ""}`,
@@ -592,7 +606,8 @@ async function reviewPanel(job, redraw) {
   };
   const extraRound = () => (cp.round >= (cp.pricing.free_rounds || 2) ? cp.pricing.extra_round || 0 : 0);
   const title = `${t("review")} · ${{ outline: "大纲确认", masters: "母版审核", native_preview: "原生预览批准", vectorize_text: "文字核对" }[cp.type]}（第 ${cp.round} 轮）`;
-  if (cp.type === "outline" || cp.type === "vectorize_text") return card(title, cp.summary ? h("p", {}, cp.summary) : null, await outlineReview(cp, send, extraRound), status);
+  if (cp.type === "vectorize_text") return card(title, cp.summary ? h("p", {}, cp.summary) : null, await textReview(cp, send), status);
+  if (cp.type === "outline") return card(title, cp.summary ? h("p", {}, cp.summary) : null, await outlineReview(cp, send, extraRound), status);
   if (cp.type === "masters") return card(title, cp.summary ? h("p", {}, cp.summary) : null, mastersReview(cp, send, extraRound), status);
   return card(title, nativeReview(cp, send, extraRound), status);
 }
@@ -615,6 +630,31 @@ async function outlineReview(cp, send, extraRound) {
         send({ decision: "revise", user_reply: general.value, annotations }, extraRound());
       } }, t("revise")),
       h("button", { class: "primary", onclick: () => send({ decision: "approve", user_reply: general.value || "通过" }, 0) }, t("approve"))));
+}
+
+async function textReview(cp, send) {
+  const documentPreview = cp.previews.find((p) => p.kind === "document");
+  const review = documentPreview && documentPreview.url ? await (await fetch(documentPreview.url)).json() : { slides: [] };
+  const images = Object.fromEntries(cp.previews.filter((p) => p.kind === "slide").map((p) => [p.slide_id, p.url]));
+  const corrections = {};
+  const added = {};
+  const pages = review.slides.map((slide) => h("div", { class: "text-review" },
+    images[slide.slide_id] ? h("img", { src: images[slide.slide_id], alt: slide.slide_id, loading: "lazy" }) : null,
+    h("div", { class: "stack" },
+      h("strong", {}, slide.slide_id),
+      slide.lines.map((line) => h("input", {
+        value: line.text, "aria-label": `${slide.slide_id} ${line.line_id}`,
+        oninput: (e) => { (corrections[slide.slide_id] = corrections[slide.slide_id] || {})[line.line_id] = e.target.value; },
+      })),
+      h("textarea", { rows: 2, placeholder: "识别漏掉的文字（每行一条，可选）",
+        oninput: (e) => { added[slide.slide_id] = e.target.value.split("\n").map((s) => s.trim()).filter(Boolean); } }),
+      h("small", { class: "muted" }, "清空一行即删除该行。"))));
+  return h("div", { class: "stack" },
+    notice("请逐页核对识别出的文字。核对后的文字会作为最终页面文字使用，之后不会再被识别结果覆盖。", "warn"),
+    pages,
+    h("div", { class: "row end" }, h("button", { class: "primary", onclick: () => send({
+      decision: "approve", user_reply: "文字已核对", answers: { text_corrections: corrections, added_lines: added },
+    }, 0) }, "确认文字，开始重建")));
 }
 
 function mastersReview(cp, send, extraRound) {

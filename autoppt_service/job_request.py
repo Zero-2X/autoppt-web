@@ -154,6 +154,13 @@ def job_request_schema() -> dict[str, Any]:
                 {"retention_days": {"enum": list(RETENTION_DAYS)}, "allow_case_study": _FLAG}
             ),
             "deadline": {"type": "string", "maxLength": 40},
+            "vectorize": _object(
+                {
+                    "pages": {"type": "string", "maxLength": 200, "pattern": r"^[0-9,，\- ]*$"},
+                    "depth": {"enum": ["text", "text_shapes", "text_shapes_charts"]},
+                    "keep_photos_as_images": _FLAG,
+                }
+            ),
         },
         ["schema_version", "service", "inputs", "delivery"],
     )

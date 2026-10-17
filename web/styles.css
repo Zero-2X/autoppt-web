@@ -114,6 +114,8 @@ td.pos { color: var(--teal); }
 .gallery img, .compare img, img.contact { width: 100%; border: 1px solid var(--line); border-radius: 6px; display: block; }
 .compare figcaption { color: var(--muted); font-size: .85rem; }
 .downloads li { margin: 4px 0; }
+.text-review { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.text-review img { width: 100%; border: 1px solid var(--line); border-radius: 6px; }
 .codes { background: #0f1b2a; color: #e8eef6; padding: 12px; border-radius: 8px; white-space: pre-wrap; min-height: 1em; }
 .tabs { display: flex; gap: 14px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
 .tabs a { text-decoration: none; color: var(--muted); }
@@ -124,6 +126,7 @@ td.pos { color: var(--teal); }
   #nav { justify-content: flex-start; gap: 10px; width: 100%; font-size: .92rem; }
   .grid.two, .grid.three { grid-template-columns: 1fr; }
   .file-row { grid-template-columns: 1fr; }
+  .text-review { grid-template-columns: 1fr; }
   .hero h1 { font-size: 1.5rem; }
   main { padding: 16px 10px 40px; }
   .table th, .table td { padding: 6px 4px; font-size: .9rem; }
