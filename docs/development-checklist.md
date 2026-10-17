@@ -365,26 +365,34 @@ draft → estimated → paid(积分冻结) → queued → intake → planning
 
 ### P2 后端 API
 
-- [ ] 项目骨架：FastAPI、SQLAlchemy/Alembic、配置管理、结构化日志
-- [ ] 数据表：`users`、`credit_accounts`、`credit_transactions`、`credit_holds`、`orders`、
+- [x] 项目骨架：FastAPI、SQLAlchemy/Alembic、配置管理、结构化日志（`autoppt_api/`；开发用 SQLite，生产用 PostgreSQL；每个请求一行 JSON 访问日志并带 `X-Request-ID`）
+- [x] 数据表：`users`、`credit_accounts`、`credit_transactions`、`credit_holds`、`orders`、
       `payments`、`redeem_codes`、`jobs`、`job_files`、`job_phases`、`job_events`、
       `checkpoints`、`artifacts`、`workers`、`provider_keys`、`usage_records`、
-      `pricing_rules`、`lesson_candidates`、`audit_logs`
-- [ ] 鉴权：邮箱或手机验证码登录，JWT 加刷新令牌，登录与发码限流；按 D4 决定是否接微信登录
-- [ ] 文件接口：预签名上传与分片上传、类型嗅探（不信任扩展名）、大小限制、病毒扫描、sha256 去重
-- [ ] 任务接口：创建草稿 → 估价 → 提交（冻结积分）→ 查询 → 取消；SSE 推送事件流
-- [ ] 检查点接口：获取待审内容、提交回复（通过、批注、重做页码），提交时校验扣费确认
-- [ ] Worker 接口（独立凭证）：领取任务租约（带可见性超时）、心跳、上报状态和事件、
+      `pricing_rules`、`lesson_candidates`、`audit_logs`；另有 `credit_entries`（复式分录）、`auth_codes`、`refresh_tokens`、
+      `stored_files`、`upload_sessions`、`idempotency_keys`、`notifications`；初始迁移 `0001`，`alembic check` 无漂移
+- [x] 鉴权：邮箱验证码登录（只存哈希、10 分钟有效、限次尝试），HS256 JWT 加一次性刷新令牌（重放即吊销整组），按邮箱和 IP 限流
+  - [ ] 手机短信验证码、微信登录（按 D4）
+- [x] 文件接口：签名 URL 分片上传（按偏移续传）、按内容嗅探类型（不信任扩展名）、大小限制、可插拔病毒扫描（`AUTOPPT_API_SCAN_COMMAND`，如 clamdscan）、按 sha256 去重存储
+  - 不提供“秒传”：只凭哈希不能取得文件，必须上传字节；本地存储代替对象存储，接口一致，生产换 MinIO/OSS/COS/S3
+- [x] 任务接口：创建草稿 → 估价 → 提交（确认金额、冻结积分、幂等）→ 查询 → 取消（释放冻结）→ 删除；SSE 推送事件流
+- [x] 检查点接口：获取待审内容（预览用签名下载链接）、提交回复（复用 Worker 侧 `validate_response`；CP3 只能由用户本人通过），重做和超出免费轮次时校验扣费确认并扣费
+- [x] Worker 接口（独立凭证）：领取任务租约（带可见性超时）、心跳、上报状态和事件、
       申请产物上传地址、提交检查点、完成或失败；所有调用幂等
-- [ ] 估价服务：读 `pricing_rules` 和 P1 的实测参数
-- [ ] 模型网关 / Key 池：
+  - [x] Worker 客户端 `autoppt_service/worker_client.py`：领取 → 按快照恢复任务目录 → 运行阶段（后台心跳）→ 上传预览、交付物、任务目录快照 → 上报状态、用量和经验候选；按能力（intake/codex/office/package）分派阶段
+- [x] 估价服务：读 `pricing_rules`，按阶段拆分，每个阶段完成时结算自己那一份；默认价格表标记为 provisional，P1 实测后由管理员更新
+- [ ] 模型网关 / Key 池（内测期用本机 Codex 账号池，由 Worker 侧 `ProfilePool` 轮换和限额延后；`provider_keys` 只登记标签，不存凭证；以下各项等 D2 改用 API key 时再做）：
   - [ ] 每个任务签发临时令牌，绑定预算上限
   - [ ] Agent SDK 通过 `ANTHROPIC_BASE_URL` 指向网关，真实 key 不下发到 Worker
   - [ ] 记录用量；遇到 429 或 5xx 时退避并切换到其他 key；按 key 控制并发
-- [ ] 通知：任务进入检查点、交付、失败时发邮件或短信
+- [x] 通知：任务进入检查点、交付、失败、暂停时写入通知队列，`python -m autoppt_api.maintenance notify` 通过 SMTP 发送（未配置时只记日志）
+  - [ ] 短信通知
 
 **验收**：用 mock Worker 走完整个任务生命周期，包括检查点往返、取消、失败退款；
 接口有 OpenAPI 文档和集成测试。
+**2026-10-17 状态**：已通过。`tests/test_api.py` 用真实 FastAPI + SQLite + mock Worker 客户端跑完原生可编辑任务（三个检查点、CP2 付费重做、
+CP3 管理员不能代批）、取消、系统失败退款、可重试失败退避、租约互斥与过期、按能力分派、幂等提交、兑换码、按内容识别类型、刷新令牌重放、
+限流、SSE、数据保留期清理；每个用例结束时核对账本（分录平衡、余额与流水一致）。`/openapi.json` 自动生成。
 
 ### P3 前端
 

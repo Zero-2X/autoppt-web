@@ -29,6 +29,8 @@ AutoPPT 的网页服务：用户购买积分，提交资料和需求，后台用
 | `autoppt_service/planning.py` | 真实规划阶段：Codex 写 `deck-plan.json`，Worker 校验并生成出图提示词 |
 | `autoppt_service/worker_template.py` | 从 `autoppt` 仓库按白名单构建 Worker 模板（脱敏、版本化），安装 skill 到各账号 |
 | `autoppt_service/templates/` | `SERVICE_AGENTS.md`（任务目录的 `AGENTS.md` 模板）和脱敏词表 |
+| `autoppt_service/worker_client.py` | Worker 进程：向后端领取阶段、运行、上传产物和快照、上报 |
+| `autoppt_api/` | 后端 API（FastAPI）：登录、积分账本、上传、任务、检查点、Worker 接口、管理后台接口 |
 
 ## 运行
 
@@ -40,6 +42,18 @@ python -m pytest -q
 $env:AUTOPPT_CODEX_BIN = "<path to codex.exe 0.163.0+>"
 python -m autoppt_service.codex_imagegen_step <job>/image-prompts.json --profiles profiles.json
 ```
+
+启动后端（开发模式会在接口返回登录验证码）和一个 mock Worker：
+
+```powershell
+$env:AUTOPPT_API_DEV_ECHO_CODES = "1"; $env:AUTOPPT_API_ADMIN_EMAILS = "you@example.com"
+alembic upgrade head
+uvicorn autoppt_api.app:create_app --factory --port 8000
+python -m autoppt_service.worker_client --api http://127.0.0.1:8000 --token <管理员创建 Worker 时返回的 token> --jobs-root D:/autoppt-jobs/worker1 --mock
+python -m autoppt_api.maintenance all
+```
+
+接口文档在 `http://127.0.0.1:8000/docs`。
 
 构建 Worker 模板、把 skill 装进每个账号，然后用真实 Codex 跑接收和规划（规划结束后停在大纲检查点 CP1）：
 

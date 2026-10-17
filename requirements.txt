@@ -1,5 +1,5 @@
 # Service-only dependencies; the read-only autoppt repository has its own requirements.txt.
-# Intake, parsers and previews import these directly:
+# Worker side (intake, parsers, previews):
 jsonschema
 numpy
 openpyxl
@@ -7,4 +7,12 @@ Pillow
 pypdf
 python-docx
 python-pptx
+# Backend API:
+alembic
+fastapi
+httpx
+pydantic
+sqlalchemy
+uvicorn
+# Tests:
 pytest
