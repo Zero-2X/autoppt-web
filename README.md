@@ -31,6 +31,7 @@ AutoPPT 的网页服务：用户购买积分，提交资料和需求，后台用
 | `autoppt_service/templates/` | `SERVICE_AGENTS.md`（任务目录的 `AGENTS.md` 模板）和脱敏词表 |
 | `autoppt_service/worker_client.py` | Worker 进程：向后端领取阶段、运行、上传产物和快照、上报 |
 | `autoppt_api/` | 后端 API（FastAPI）：登录、积分账本、上传、任务、检查点、Worker 接口、管理后台接口 |
+| `web/` | 前端（无构建的 HTML/CSS/ES 模块，由后端托管在 `/`）：下单向导、审核、下载、积分、管理后台 |
 
 ## 运行
 
@@ -53,7 +54,7 @@ python -m autoppt_service.worker_client --api http://127.0.0.1:8000 --token <管
 python -m autoppt_api.maintenance all
 ```
 
-接口文档在 `http://127.0.0.1:8000/docs`。
+网页在 `http://127.0.0.1:8000/`，接口文档在 `http://127.0.0.1:8000/docs`。
 
 构建 Worker 模板、把 skill 装进每个账号，然后用真实 Codex 跑接收和规划（规划结束后停在大纲检查点 CP1）：
 

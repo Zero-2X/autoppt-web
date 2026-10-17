@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Iterable
 
 from sqlalchemy import func, select
@@ -201,6 +201,11 @@ def check_ledger(session: Session) -> list[str]:
     return issues
 
 
+def _iso(value: datetime) -> str:
+    value = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return value.isoformat().replace("+00:00", "Z")
+
+
 def statement(session: Session, user_id: str, limit: int = 100) -> list[dict]:
     account = user_account(session, user_id)
     rows = session.execute(
@@ -212,6 +217,6 @@ def statement(session: Session, user_id: str, limit: int = 100) -> list[dict]:
     )
     return [
         {"id": txn.id, "kind": txn.kind, "amount": amount, "job_id": txn.job_id, "memo": txn.memo,
-         "created_at": txn.created_at.isoformat() if isinstance(txn.created_at, datetime) else txn.created_at}
+         "created_at": _iso(txn.created_at)}
         for txn, amount in rows
     ]

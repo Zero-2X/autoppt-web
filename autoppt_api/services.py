@@ -63,6 +63,11 @@ def aware(value: datetime | None) -> datetime | None:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
+def iso(value: datetime | None) -> str | None:
+    """UTC ISO 8601 with a Z suffix; SQLite returns naive datetimes that are UTC."""
+    return aware(value).isoformat().replace("+00:00", "Z") if value is not None else None
+
+
 def audit(session: Session, actor_type: str, actor_id: str, action: str, target: str = "", **data: Any) -> None:
     session.add(AuditLog(actor_type=actor_type, actor_id=actor_id or "", action=action, target=target, data=data))
 

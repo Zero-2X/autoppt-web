@@ -20,10 +20,12 @@ import secrets
 import time
 from collections.abc import Iterator
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -68,6 +70,7 @@ from autoppt_api.services import (
     answer_checkpoint,
     audit,
     aware,
+    iso,
     cancel_job,
     complete_phase,
     create_draft,
@@ -86,6 +89,8 @@ from autoppt_service.export_options import export_options
 
 CHUNK_SIZE = 8 * 1024 * 1024
 access_log = logging.getLogger("autoppt_api.access")
+CSP = ("default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; "
+       "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 
 
 # ---------------------------------------------------------------- request bodies
@@ -213,6 +218,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         started = time.monotonic()
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
+        if not request.url.path.startswith("/api/"):
+            response.headers["Content-Security-Policy"] = CSP
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["Referrer-Policy"] = "no-referrer"
         access_log.info(json.dumps({
             "request_id": request_id, "method": request.method, "path": request.url.path,
             "status": response.status_code, "ms": round((time.monotonic() - started) * 1000, 1),
@@ -290,14 +299,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "id": job.id, "state": job.state, "title": job.title, "service": job.service,
             "pending_phase": job.pending_phase, "estimate": job.estimate, "blocked_reason": job.blocked_reason,
             "hold": {"amount": hold.amount, "remaining": hold.remaining, "status": hold.status} if hold else None,
-            "created_at": job.created_at.isoformat(), "submitted_at": job.submitted_at.isoformat() if job.submitted_at else None,
-            "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+            "created_at": iso(job.created_at), "submitted_at": iso(job.submitted_at) if job.submitted_at else None,
+            "finished_at": iso(job.finished_at) if job.finished_at else None,
         }
         if detail:
             view["request"] = job.request
             view["phases"] = [
                 {"phase": p.phase, "attempt": p.attempt, "status": p.status, "settled_credits": p.settled_credits,
-                 "started_at": p.started_at.isoformat(), "finished_at": p.finished_at.isoformat() if p.finished_at else None}
+                 "started_at": iso(p.started_at), "finished_at": iso(p.finished_at) if p.finished_at else None}
                 for p in session.scalars(select(JobPhase).where(JobPhase.job_id == job.id).order_by(JobPhase.started_at))
             ]
             checkpoint = open_checkpoint_for(session, job)
@@ -317,6 +326,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/options")
     def options() -> dict[str, Any]:
         return export_options()
+
+    @app.get("/api/pricing")
+    def pricing(session: Session = Depends(db)) -> dict[str, Any]:
+        from autoppt_api.pricing import active_rules
+
+        version, rules = active_rules(session)
+        return {"version": version, "rules": rules,
+                "note": "测试期价格，P1 实测后调整" if rules.get("provisional") else ""}
 
     # ------------------------------------------------------------ auth
 
@@ -542,7 +559,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def events(job_id: str, after: int = 0, user: User = Depends(current_user), session: Session = Depends(db)) -> list[dict[str, Any]]:
         own_job(job_id, user, session)
         rows = session.scalars(select(JobEvent).where(JobEvent.job_id == job_id, JobEvent.id > after).order_by(JobEvent.id).limit(500))
-        return [{"id": e.id, "kind": e.kind, "message": e.message, "data": e.data, "at": e.created_at.isoformat()} for e in rows]
+        return [{"id": e.id, "kind": e.kind, "message": e.message, "data": e.data, "at": iso(e.created_at)} for e in rows]
 
     @app.get("/api/jobs/{job_id}/events/stream")
     def stream(job_id: str, after: int = 0, timeout: float = Query(25.0, ge=0, le=300), user: User = Depends(current_user),
@@ -598,10 +615,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if body.template_version:
             worker.template_version = body.template_version
         if worker.status != "active":
-            return JSONResponse(status_code=204, content=None)
+            return Response(status_code=204)
         job = lease_job(session, worker, timeout_s=settings.lease_timeout_s)
         if job is None:
-            return JSONResponse(status_code=204, content=None)
+            return Response(status_code=204)
         files = [
             {"file_id": f.file_id, "role": f.role, "name": f.name, "sha256": f.sha256, "size": f.size, "url": download_url(f.sha256, f.name)}
             for f in session.scalars(select(JobFile).where(JobFile.job_id == job.id))
@@ -610,7 +627,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         snapshot = session.get(Artifact, job.snapshot_artifact_id) if job.snapshot_artifact_id else None
         return {
             "job_id": job.id, "phase": job.pending_phase, "state": job.state, "lease_token": job.lease_token,
-            "lease_expires_at": job.lease_expires_at.isoformat(), "request": job.normalized, "files": files,
+            "lease_expires_at": iso(job.lease_expires_at), "request": job.normalized, "files": files,
             "checkpoint_response": answered.response if answered else None,
             "snapshot": {"url": download_url(snapshot.sha256, "snapshot.zip"), "sha256": snapshot.sha256} if snapshot else None,
         }
@@ -626,7 +643,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                          session: Session = Depends(db)) -> dict[str, Any]:
         job = heartbeat(session, leased(job_id, worker, session), worker, body.lease_token,
                         timeout_s=settings.lease_timeout_s, progress=body.progress)
-        return {"lease_expires_at": job.lease_expires_at.isoformat(), "state": job.state, "cancelled": job.state == "cancelled"}
+        return {"lease_expires_at": iso(job.lease_expires_at), "state": job.state, "cancelled": job.state == "cancelled"}
 
     @app.put("/api/worker/jobs/{job_id}/artifacts")
     async def worker_artifact(job_id: str, request: Request, kind: str = Query(pattern="^(preview|deliverable|snapshot|report)$"),
@@ -711,10 +728,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         audit(session, "admin", admin.id, "worker.create", worker.id, name=body.name)
         return {"worker_id": worker.id, "token": token, "note": "shown once; only the hash is stored"}
 
+    @app.get("/api/admin/users")
+    def admin_users(email: str = "", _admin: User = Depends(admin_user), session: Session = Depends(db)) -> list[dict[str, Any]]:
+        query = select(User).order_by(User.created_at.desc()).limit(100)
+        if email:
+            query = query.where(User.email.contains(email.strip().lower()))
+        result = []
+        for user in session.scalars(query):
+            account = ledger.user_account(session, user.id)
+            result.append({"id": user.id, "email": user.email, "is_admin": user.is_admin, "status": user.status,
+                           "balance": account.balance, "available": ledger.available(session, account),
+                           "created_at": iso(user.created_at)})
+        return result
+
     @app.get("/api/admin/workers")
     def admin_workers(_admin: User = Depends(admin_user), session: Session = Depends(db)) -> list[dict[str, Any]]:
         return [{"id": w.id, "name": w.name, "status": w.status, "capabilities": w.capabilities, "template_version": w.template_version,
-                 "last_heartbeat_at": w.last_heartbeat_at.isoformat() if w.last_heartbeat_at else None}
+                 "last_heartbeat_at": iso(w.last_heartbeat_at) if w.last_heartbeat_at else None}
                 for w in session.scalars(select(Worker))]
 
     @app.put("/api/admin/pricing")
@@ -769,7 +799,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/admin/audit")
     def admin_audit(limit: int = Query(100, le=1000), _admin: User = Depends(admin_user), session: Session = Depends(db)) -> list[dict[str, Any]]:
         return [{"id": a.id, "actor_type": a.actor_type, "actor_id": a.actor_id, "action": a.action, "target": a.target,
-                 "data": a.data, "at": a.created_at.isoformat()}
+                 "data": a.data, "at": iso(a.created_at)}
                 for a in session.scalars(select(AuditLog).order_by(AuditLog.id.desc()).limit(limit))]
+
+    web_root = Path(__file__).resolve().parents[1] / "web"
+    if web_root.is_dir():
+        # The single-page front end; API routes above take precedence.
+        app.mount("/", StaticFiles(directory=web_root, html=True), name="web")
 
     return app
