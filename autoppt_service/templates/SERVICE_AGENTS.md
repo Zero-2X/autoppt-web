@@ -28,8 +28,12 @@ prompt. Do that phase only, then stop.
   plain Windows PowerShell `Get-Content` decodes it as ANSI and garbles
   Chinese. Write JSON (including `service/status.json`) with Python
   `json.dump(..., ensure_ascii=False)` to a file opened with
-  `encoding="utf-8"`, never with PowerShell `Set-Content`/`Out-File`, which
-  turns Chinese into `?`. Do not spend steps diagnosing encodings.
+  `encoding="utf-8"`, never with PowerShell `Set-Content`/`Out-File`: without
+  `-Encoding` they turn Chinese into `?`, and with `-Encoding UTF8` Windows
+  PowerShell 5 adds a BOM that breaks `json.load` (read with
+  `encoding="utf-8-sig"` if a file may have one). Write multi-line Python to a
+  `.py` file with Python itself, not through a PowerShell here-string. Do not
+  spend steps diagnosing encodings.
 - Context is budgeted: read each file once, prefer the `.md` summaries, and
   print only the parts you need (one section of a reference, not the whole
   file again).
