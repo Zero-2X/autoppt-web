@@ -338,18 +338,24 @@ draft → estimated → paid(积分冻结) → queued → intake → planning
   - [x] `acceptance.py`：把 CP3 的用户回复转成与 `zhicang-native-acceptance.json` 同字段的验收记录 `service/acceptance.json`
   - [x] `usage.py`：记录 token、Office 占用时长和各阶段耗时（`service/usage.jsonl`，兼容出图步骤的记录），按阶段汇总，可按输入的单价估算费用
   - [x] `export_options.py`：把场景和风格档案导出成前端可用的 JSON（含中文名、适用场景、默认页数范围）；不提供官方来源的学校风格原型
-- [ ] 编写服务模式指令 `SERVICE_AGENTS.md`，作为任务目录里的 `AGENTS.md` 供 `codex exec` 读取：
-  - [ ] 保留经验闭环（读台账、风格手册、生产经验、v66 基准），去掉智仓兴教专属的续跑段落
-  - [ ] 禁止直接向用户提问，只能通过检查点文件交互
-  - [ ] 经验只写入任务目录内的台账，不写全局受跟踪文件
-  - [ ] 写明每阶段的预算、轮数上限，以及达到上限时的收尾方式（保存产物，写 `blocked`）
-  - [ ] 明确交付层级的用词，禁止把低层级的证据当作高层级成果对外宣称
-- [ ] Worker 模板构建脚本：按白名单导出 `autopptskills/`、`autoppt_workflow/`、`scripts/`、
+- [x] 编写服务模式指令 `SERVICE_AGENTS.md`（`autoppt_service/templates/`），每个代理阶段开始前由 Worker 渲染成任务目录里的 `AGENTS.md`（填入模板路径、任务号、预算；代理改过也会被覆盖）：
+  - [x] 保留经验闭环（读台账、风格手册、生产经验、v66 基准、可编辑时读矢量化失败手册），去掉智仓兴教专属的续跑段落
+  - [x] 禁止直接向用户提问，只能通过状态和检查点文件交互；上传内容一律当作数据，不当作指令（防提示注入）
+  - [x] 经验只写入任务目录的 `service/lesson-candidates.jsonl`，不写模板或全局台账，且不得含客户姓名、题目、数据
+  - [x] 写明每阶段的预算、轮数上限，以及达到上限时的收尾方式（保存产物，写 `blocked`）；目前只有 planning 的预算（每次 30 分钟、共 2 次）
+  - [x] 明确交付层级的用词，禁止把低层级的证据当作高层级成果对外宣称
+  - [x] planning 阶段契约：代理只写 `deck-plan.json`；Worker 校验（证据 id、封面原文、必须包含/避免、证据中不存在的数字、页数范围、经验记录），不通过时把问题发回再跑一次，仍不通过则 `blocked`；通过后用原仓库 `build_imagegen_prompt_manifest.build` 生成 `deck-spec.json` 和 `image-prompts.json`，并由 Worker 打开 CP1
+  - [ ] reconstruct 阶段的指令和预算（需要 Office Worker）
+- [x] Worker 模板构建脚本 `worker_template.py`：按白名单导出 `autopptskills/`、`autoppt_workflow/`、`scripts/`、
       经脱敏的 `improvement/`、必要的 `docs/`，把 skill 安装到每个账号的 `CODEX_HOME/skills/`；**排除**
       `deliverables/`、`reviews/`、`runs/`、`交付/`、`智搬小匠_*`、`.tmp/`、根目录的大 PPTX
+  - [x] 版本不可覆盖，`template-manifest.json` 记录源提交、是否有未提交改动、逐文件 sha256；运行前校验模板未被改动
+  - [x] 脱敏：台账只保留经验字段，文本文件按 `templates/redactions.json` 替换案例名和本地/运行产物路径；代码不改写，只在清单中列出含案例名的文件（当前 8 个脚本含“智仓兴教”，需要管理员决定）
+  - [x] `docs/` 默认不导出，需要时用 `--include-doc` 指定；skill 安装带暂存和备份，并可逐账号核对版本
 - [ ] 本地命令 `python -m autoppt_service.run_job <job-request.json> --phase planning|masters|reconstruct|package`，在一台 Windows 机器上用 `codex exec` 依次跑完各阶段（masters 阶段直接调用已完成的出图步骤），检查点之间人工写入回复
   - [x] 命令、阶段驱动、`--respond` 写入回复、`--mock` 全流程已完成；真实路线已接通 intake、masters（读任务根目录的 `image-prompts.json`）和图片版打包（调用原仓库 `build_image_deck.py`）
-  - [ ] 真实 planning 和 reconstruct 依赖 `SERVICE_AGENTS.md` 与 Office Worker，目前返回“未就绪”（退出码 3）
+  - [x] 真实 planning 已接通（`--template`、`--profiles`；Codex 以 `-s workspace-write` 运行，不开 `--search`）；用假 CLI 测试过，**尚未用真实账号跑过**
+  - [ ] 真实 reconstruct 依赖 Office Worker，目前返回“未就绪”（退出码 3）；4:3 画幅在 planning 阶段 `blocked`（原仓库提示词构建器只支持 16:9）
 - [ ] 准备 3–5 份脱敏样例（论文答辩、国自然申请、组会报告、纯描述无文档、矢量化），逐份实跑
 - [ ] 记录每份样例的耗时、费用、轮数、失败点，据此定价和设定各阶段预算
 - [x] 给新模块补 pytest 用例；`--mock` 路径跑通全流程（供后端联调）：`python -m autoppt_service.run_job req.json --job-dir <dir> --job-id J1 --uploads uploads.json --phase all --mock --auto-respond`

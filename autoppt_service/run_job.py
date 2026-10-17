@@ -10,11 +10,12 @@ redo goes back one phase), then runs only if the job state matches.  A phase
 that reaches a checkpoint writes ``service/checkpoint.json`` and stops; the
 answer is written with ``--respond`` (or by the backend) before the next run.
 
-Real routes available now: ``intake``; ``masters`` (the Codex ImageGen step,
-reading ``image-prompts.json`` at the job root, which planning writes); and
-image-deck packaging through the workflow's ``build_image_deck.py``.
-Planning and reconstruction need the service-mode agent instructions, which
-are not written yet, so they stop with :class:`PhaseNotReady`.
+Real routes available now: ``intake``; ``planning`` (one Codex session per
+attempt following the job's AGENTS.md, checked by :mod:`autoppt_service.planning`,
+needs ``--template`` and ``--profiles``); ``masters`` (the Codex ImageGen step,
+reading the ``image-prompts.json`` that planning writes); and image-deck
+packaging through the workflow's ``build_image_deck.py``.  Native
+reconstruction is not enabled yet and stops with :class:`PhaseNotReady`.
 
 ``--mock`` runs every phase without Codex or Office.  Mock output is structural
 evidence only: every artefact is labelled mock, and the mock acceptance record
@@ -214,10 +215,84 @@ def phase_intake(job_dir: Path, *, job_id: str, request: dict[str, Any], uploads
     return {"phase": "intake", "status": report["status"], "job_state": report.get("job_state")}
 
 
-def phase_planning(job_dir: Path, *, mock: bool) -> dict[str, Any]:
+def _resolve_template(template: Path | None) -> Path:
+    value = template or (Path(os.environ["AUTOPPT_WORKER_TEMPLATE"]) if os.getenv("AUTOPPT_WORKER_TEMPLATE") else None)
+    if value is None:
+        raise PhaseNotReady("this phase needs a worker template: pass --template or set AUTOPPT_WORKER_TEMPLATE "
+                            "(build one with python -m autoppt_service.worker_template build)")
+    return Path(value)
+
+
+def _real_planning(
+    job_dir: Path,
+    state: dict[str, Any],
+    *,
+    job_id: str,
+    template: Path | None,
+    profiles_path: Path | None,
+    command: Sequence[str] | None,
+    reasoning_effort: str | None,
+) -> dict[str, Any]:
+    from autoppt_service.codex_exec import load_profiles
+    from autoppt_service.planning import DECK_PLAN, PlanningBlocked, run_planning_agent
+
+    template = _resolve_template(template)
+    round_no = _round(job_dir, "outline")
+    previous = _last_response(job_dir, "outline")
+    revision = previous if previous and previous["decision"] == "revise" else None
+    with phase_timer(job_dir, "planning", round=round_no):
+        try:
+            report = run_planning_agent(
+                job_dir,
+                job_id=job_id,
+                template=template,
+                profiles=load_profiles(profiles_path),
+                round_no=round_no,
+                revision=revision,
+                command=command,
+                reasoning_effort=reasoning_effort,
+            )
+        except PlanningBlocked as exc:
+            state = transition(state, "blocked", reason="planning: " + "; ".join(exc.issues)[:980])
+            save_job_state(job_dir, state)
+            return {"phase": "planning", "job_state": state["state"], "issues": exc.issues}
+        outline = job_dir / HANDOFF_DIR / "outline-preview.md"
+        summary = f"{report['slides']} slides planned"
+        if report["warnings"]:
+            summary += "; please check: " + "; ".join(report["warnings"])
+        state = _checkpoint_or_advance(
+            job_dir,
+            state,
+            lambda: {
+                "checkpoint_id": f"cp1-outline-r{round_no}",
+                "type": "outline",
+                "round": round_no,
+                "summary": summary[:4000],
+                "previews": [{"path": relative_to_job(job_dir, outline), "kind": "document"}],
+                "questions": [{"question_id": "approve_outline", "text": "大纲是否可以进入母版生成？", "kind": "approve"}],
+                "slide_manifest_sha256": sha256_file(job_dir / DECK_PLAN),
+            },
+            "planning done",
+        )
+    return {"phase": "planning", "job_state": state["state"], "slides": report["slides"], "warnings": report["warnings"]}
+
+
+def phase_planning(
+    job_dir: Path,
+    *,
+    mock: bool,
+    job_id: str = "",
+    template: Path | None = None,
+    profiles_path: Path | None = None,
+    command: Sequence[str] | None = None,
+    reasoning_effort: str | None = None,
+) -> dict[str, Any]:
     state = _enter(job_dir, "planning")
     if not mock:
-        raise PhaseNotReady("planning needs the service-mode agent instructions (SERVICE_AGENTS.md), not built yet")
+        return _real_planning(
+            job_dir, state, job_id=job_id, template=template, profiles_path=profiles_path,
+            command=command, reasoning_effort=reasoning_effort,
+        )
     brief = read_json(job_dir / HANDOFF_DIR / "planning-brief.json")
     ledger = read_json(job_dir / EVIDENCE_DIR / "evidence-ledger.json") or {}
     with phase_timer(job_dir, "planning", mock=True):
@@ -328,7 +403,7 @@ def phase_masters(job_dir: Path, *, mock: bool, profiles_path: Path | None = Non
 def phase_reconstruct(job_dir: Path, *, mock: bool) -> dict[str, Any]:
     state = _enter(job_dir, "reconstruct")
     if not mock:
-        raise PhaseNotReady("native reconstruction needs SERVICE_AGENTS.md and an Office worker, not built yet")
+        raise PhaseNotReady("native reconstruction is not enabled yet (needs its SERVICE_AGENTS.md section and an Office worker)")
     request = read_json(service_path(job_dir, "job-request.json"))
     slide_brief = read_json(job_dir / HANDOFF_DIR / "slide_brief.json") or {"slides": []}
     masters = discover_slides(job_dir / MASTERS_DIR)
@@ -443,13 +518,19 @@ def run_phase(
     request: dict[str, Any] | None = None,
     uploads: dict[str, str] | None = None,
     profiles_path: Path | None = None,
+    template: Path | None = None,
+    command: Sequence[str] | None = None,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     if phase == "intake":
         if request is None:
             raise PhaseError("intake needs the job request")
         return phase_intake(job_dir, job_id=job_id, request=request, uploads=uploads or {})
     if phase == "planning":
-        return phase_planning(job_dir, mock=mock)
+        return phase_planning(
+            job_dir, mock=mock, job_id=job_id, template=template, profiles_path=profiles_path,
+            command=command, reasoning_effort=reasoning_effort,
+        )
     if phase == "masters":
         return phase_masters(job_dir, mock=mock, profiles_path=profiles_path)
     if phase == "reconstruct":
@@ -503,7 +584,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--phase", choices=[*PHASES, "all"])
     parser.add_argument("--uploads", type=Path, help='JSON object {"file_id": "path"} for intake')
-    parser.add_argument("--profiles", type=Path, help="Codex profiles JSON for the masters phase")
+    parser.add_argument("--profiles", type=Path, help="Codex profiles JSON for the planning and masters phases")
+    parser.add_argument("--template", type=Path, help="worker template directory (default: $AUTOPPT_WORKER_TEMPLATE)")
+    parser.add_argument("--reasoning-effort", default=None, help="Codex reasoning effort for agent phases")
     parser.add_argument("--respond", type=Path, help="write this checkpoint answer, then exit")
     parser.add_argument("--mock", action="store_true", help="no Codex/Office; structural evidence only")
     parser.add_argument("--auto-respond", action="store_true", help="with --phase all --mock: answer checkpoints automatically")
@@ -529,6 +612,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 payload = run_phase(
                     args.job_dir, args.phase, job_id=args.job_id, mock=args.mock,
                     request=request, uploads=uploads, profiles_path=args.profiles,
+                    template=args.template, reasoning_effort=args.reasoning_effort,
                 )
             except PhaseNotReady as exc:
                 payload, code = {"phase": args.phase, "not_ready": str(exc)}, 3

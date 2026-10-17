@@ -1,0 +1,12 @@
+{
+  "note": "Literal terms replaced in exported text files (md/json/jsonl/yaml/txt). Code files are never rewritten; hits there are only reported in the template manifest. Add customer, person and project names here before building a template.",
+  "terms": {
+    "张正轩": "[案例人员]",
+    "智仓兴教": "[案例项目A]",
+    "智搬小匠": "[案例项目B]"
+  },
+  "patterns": [
+    {"pattern": "(?i)\\b[A-Z]:[\\\\/][^\\s\"'`)]*", "replacement": "[本地路径]"},
+    {"pattern": "\\b(?:runs|deliverables|reviews)/[^\\s\"'`)]*", "replacement": "[运行产物路径]"}
+  ]
+}

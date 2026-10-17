@@ -208,11 +208,12 @@ def test_mock_flow_stops_at_checkpoints_and_handles_rework(tmp_path, uploads):
     assert (job / "output/image-deck.pptx").exists()
 
 
-def test_real_routes_not_built_yet_say_so(tmp_path, uploads):
+def test_real_routes_report_what_they_need(tmp_path, uploads, monkeypatch):
     files, paths = uploads
     job = tmp_path / "job"
+    monkeypatch.delenv("AUTOPPT_WORKER_TEMPLATE", raising=False)
     run_phase(job, "intake", job_id="J1", request=make_request(files=files), uploads=paths)
-    with pytest.raises(PhaseNotReady, match="SERVICE_AGENTS"):
+    with pytest.raises(PhaseNotReady, match="worker template"):
         run_phase(job, "planning", job_id="J1")
     with pytest.raises(PhaseError):
         run_phase(job, "reconstruct", job_id="J1", mock=True)  # wrong state

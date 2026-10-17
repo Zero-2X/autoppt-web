@@ -26,6 +26,9 @@ AutoPPT 的网页服务：用户购买积分，提交资料和需求，后台用
 | `autoppt_service/previews.py` | 缩略图、联系表、母版/原生并排图、差异热图 |
 | `autoppt_service/usage.py` | token、Office 时长、阶段耗时记录与汇总 |
 | `autoppt_service/run_job.py` | 按阶段运行任务；`--mock` 可跑通全流程 |
+| `autoppt_service/planning.py` | 真实规划阶段：Codex 写 `deck-plan.json`，Worker 校验并生成出图提示词 |
+| `autoppt_service/worker_template.py` | 从 `autoppt` 仓库按白名单构建 Worker 模板（脱敏、版本化），安装 skill 到各账号 |
+| `autoppt_service/templates/` | `SERVICE_AGENTS.md`（任务目录的 `AGENTS.md` 模板）和脱敏词表 |
 
 ## 运行
 
@@ -37,6 +40,17 @@ python -m pytest -q
 $env:AUTOPPT_CODEX_BIN = "<path to codex.exe 0.163.0+>"
 python -m autoppt_service.codex_imagegen_step <job>/image-prompts.json --profiles profiles.json
 ```
+
+构建 Worker 模板、把 skill 装进每个账号，然后用真实 Codex 跑接收和规划（规划结束后停在大纲检查点 CP1）：
+
+```powershell
+python -m autoppt_service.worker_template build --out D:/autoppt-worker/templates
+python -m autoppt_service.worker_template install --template D:/autoppt-worker/templates/<version> --profiles profiles.json
+python -m autoppt_service.run_job req.json --job-dir D:/jobs/J001 --job-id J001 --uploads uploads.json --phase intake
+python -m autoppt_service.run_job --job-dir D:/jobs/J001 --job-id J001 --phase planning --template D:/autoppt-worker/templates/<version> --profiles profiles.json
+```
+
+构建前先在 `autoppt_service/templates/redactions.json` 里补全需要脱敏的姓名和项目名。
 
 不接 Codex 和 Office 跑通全流程（结构验证用，产物全部标为 mock）：
 
