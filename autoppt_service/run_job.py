@@ -108,10 +108,21 @@ def apply_answered_checkpoint(job_dir: Path) -> tuple[dict[str, Any], dict[str, 
     return checkpoint, response
 
 
+def resume_blocked(job_dir: Path, *, reason: str = "resumed by operator") -> dict[str, Any]:
+    """Return a blocked job to the state it was blocked from (after the cause was fixed)."""
+    state = load_job_state(job_dir)
+    if state is None or state["state"] != "blocked":
+        raise PhaseError("job is not blocked")
+    state = transition(state, state["blocked_from"], reason=reason)
+    save_job_state(job_dir, state)
+    return state
+
+
 def _enter(job_dir: Path, phase: str) -> dict[str, Any]:
     state = load_job_state(job_dir)
     if state is None:
         raise PhaseError("job has no state yet; run intake first")
+    service_path(job_dir, "deferred.json").unlink(missing_ok=True)
     apply_answered_checkpoint(job_dir)
     state = load_job_state(job_dir)
     if state["state"] in CHECKPOINT_STATES and pending_checkpoint(job_dir) is not None:
@@ -234,7 +245,7 @@ def _real_planning(
     reasoning_effort: str | None,
 ) -> dict[str, Any]:
     from autoppt_service.codex_exec import load_profiles
-    from autoppt_service.planning import DECK_PLAN, PlanningBlocked, run_planning_agent
+    from autoppt_service.planning import DECK_PLAN, PlanningBlocked, PlanningDeferred, run_planning_agent
 
     template = _resolve_template(template)
     round_no = _round(job_dir, "outline")
@@ -252,6 +263,14 @@ def _real_planning(
                 command=command,
                 reasoning_effort=reasoning_effort,
             )
+        except PlanningDeferred as exc:
+            # Not the user's problem: the job stays in planning and is retried after the reset.
+            write_json_atomic(
+                service_path(job_dir, "deferred.json"),
+                {"phase": "planning", "reason": exc.message, "retry_after": exc.retry_after, "at": utc_now()},
+            )
+            return {"phase": "planning", "job_state": state["state"], "deferred": True,
+                    "reason": exc.message, "retry_after": exc.retry_after}
         except PlanningBlocked as exc:
             state = transition(state, "blocked", reason="planning: " + "; ".join(exc.issues)[:980])
             save_job_state(job_dir, state)
@@ -588,12 +607,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--template", type=Path, help="worker template directory (default: $AUTOPPT_WORKER_TEMPLATE)")
     parser.add_argument("--reasoning-effort", default=None, help="Codex reasoning effort for agent phases")
     parser.add_argument("--respond", type=Path, help="write this checkpoint answer, then exit")
+    parser.add_argument("--resume", action="store_true", help="return a blocked job to the state it was blocked from, then exit")
     parser.add_argument("--mock", action="store_true", help="no Codex/Office; structural evidence only")
     parser.add_argument("--auto-respond", action="store_true", help="with --phase all --mock: answer checkpoints automatically")
     args = parser.parse_args(argv)
 
     if args.respond:
         payload: Any = submit_response(args.job_dir, read_json(args.respond))
+    elif args.resume:
+        payload = {"job_state": resume_blocked(args.job_dir)["state"]}
     else:
         if not args.phase:
             parser.error("give --phase or --respond")

@@ -14,6 +14,7 @@ cost estimate (prices are inputs; nothing here is a published price).
 
 from __future__ import annotations
 
+import json
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -29,16 +30,51 @@ def usage_log(job_dir: Path) -> Path:
     return service_path(job_dir, "usage.jsonl")
 
 
-def record_agent_turn(job_dir: Path, phase: str, result: Any, **extra: Any) -> dict[str, Any]:
-    """Log one turn; ``result`` is a ``CodexExecResult`` or its ``to_dict()``."""
+def rollout_token_usage(rollout: Path | None) -> dict[str, Any]:
+    """Last cumulative ``token_count`` in a Codex rollout.
+
+    A turn that fails (for example on a usage limit) emits no ``turn.completed``
+    usage, but the rollout still records what the session consumed.
+    """
+    if rollout is None or not Path(rollout).exists():
+        return {}
+    usage: dict[str, Any] = {}
+    for line in Path(rollout).read_text(encoding="utf-8", errors="replace").splitlines():
+        if '"token_count"' not in line:
+            continue
+        try:
+            payload = json.loads(line).get("payload") or {}
+        except json.JSONDecodeError:
+            continue
+        if payload.get("type") != "token_count":
+            continue
+        total = (payload.get("info") or {}).get("total_token_usage")
+        if isinstance(total, dict):
+            usage = total
+    return usage
+
+
+def record_agent_turn(
+    job_dir: Path, phase: str, result: Any, *, rollout: Path | None = None, **extra: Any
+) -> dict[str, Any]:
+    """Log one turn; ``result`` is a ``CodexExecResult`` or its ``to_dict()``.
+
+    Without ``turn.completed`` usage, the totals are read from ``rollout`` if given.
+    """
     data = result.to_dict() if hasattr(result, "to_dict") else dict(result)
+    usage = data.get("usage") or {}
+    usage_source = "turn.completed" if usage else "none"
+    if not usage and rollout is not None:
+        usage = rollout_token_usage(rollout)
+        usage_source = "rollout.token_count" if usage else "none"
     record = {
         "timestamp": utc_now(),
         "kind": "agent_turn",
         "phase": phase,
         "profile": data.get("profile", ""),
         "thread_id": data.get("thread_id", ""),
-        "usage": data.get("usage") or {},
+        "usage": usage,
+        "usage_source": usage_source,
         "duration_s": data.get("duration_s"),
         "status": "ok" if data.get("returncode") == 0 and not data.get("timed_out") else "failed",
         "rate_limited": bool(data.get("rate_limited")),

@@ -354,7 +354,7 @@ draft → estimated → paid(积分冻结) → queued → intake → planning
   - [x] `docs/` 默认不导出，需要时用 `--include-doc` 指定；skill 安装带暂存和备份，并可逐账号核对版本
 - [ ] 本地命令 `python -m autoppt_service.run_job <job-request.json> --phase planning|masters|reconstruct|package`，在一台 Windows 机器上用 `codex exec` 依次跑完各阶段（masters 阶段直接调用已完成的出图步骤），检查点之间人工写入回复
   - [x] 命令、阶段驱动、`--respond` 写入回复、`--mock` 全流程已完成；真实路线已接通 intake、masters（读任务根目录的 `image-prompts.json`）和图片版打包（调用原仓库 `build_image_deck.py`）
-  - [x] 真实 planning 已接通（`--template`、`--profiles`；Codex 以 `-s workspace-write` 运行，不开 `--search`）；用假 CLI 测试过，**尚未用真实账号跑过**
+  - [x] 真实 planning 已接通（`--template`、`--profiles`；Codex 以 `-s workspace-write` 运行，不开 `--search`）；2026-10-17 用真实账号跑通一份样例到 CP1（7.7 分钟，约 69 万输入 / 1.1 万输出 token，校验一次通过），见 [实测记录](p1-real-planning-run.md)；账号限额时任务延后而不是 blocked
   - [ ] 真实 reconstruct 依赖 Office Worker，目前返回“未就绪”（退出码 3）；4:3 画幅在 planning 阶段 `blocked`（原仓库提示词构建器只支持 16:9）
 - [ ] 准备 3–5 份脱敏样例（论文答辩、国自然申请、组会报告、纯描述无文档、矢量化），逐份实跑
 - [ ] 记录每份样例的耗时、费用、轮数、失败点，据此定价和设定各阶段预算

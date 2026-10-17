@@ -26,7 +26,7 @@ from typing import Any, Callable, Sequence
 
 from jsonschema import Draft202012Validator
 
-from autoppt_service.codex_exec import CodexProfile, ProfilePool, run_codex_exec
+from autoppt_service.codex_exec import CodexProfile, ProfilePool, find_rollout, run_codex_exec
 from autoppt_service.jobfiles import EVIDENCE_DIR, HANDOFF_DIR, read_json, service_path, utc_now, write_json_atomic
 from autoppt_service.repo_paths import ensure_autoppt_on_path
 from autoppt_service.usage import record_agent_turn
@@ -98,6 +98,27 @@ class PlanningBlocked(RuntimeError):
     def __init__(self, issues: list[str]) -> None:
         self.issues = list(issues)
         super().__init__("; ".join(self.issues))
+
+
+class PlanningDeferred(RuntimeError):
+    """Every Codex profile is at its usage limit; run the phase again after ``retry_after``."""
+
+    def __init__(self, message: str, retry_after: str | None) -> None:
+        self.message = message
+        self.retry_after = retry_after
+        super().__init__(message)
+
+
+_RETRY_AT = re.compile(r"try again (?:at|in) ([^.]+?)(?:\.|$)", re.IGNORECASE)
+
+
+def usage_limit_retry_hint(errors: Sequence[str]) -> str | None:
+    """The reset time Codex reports ("try again at 2:21 PM"), verbatim, if any."""
+    for error in errors:
+        match = _RETRY_AT.search(error)
+        if match:
+            return match.group(1).strip()
+    return None
 
 
 def _numbers(text: str) -> set[str]:
@@ -173,6 +194,14 @@ def validate_deck_plan(plan: Any, brief: dict[str, Any], ledger: dict[str, Any],
         if keep["asset_id"] not in used_assets:
             warnings.append(f"keep-as-image asset {keep['asset_id']} ({keep['source_file']}) is not used on any slide")
     return errors, warnings
+
+
+def _unique_run_dir(root: Path, name: str) -> Path:
+    """Never reuse a run directory: a retried phase keeps the earlier session's evidence."""
+    candidate, counter = root / name, 2
+    while candidate.exists():
+        candidate, counter = root / f"{name}-{counter}", counter + 1
+    return candidate
 
 
 def build_agent_prompt(job_id: str, round_no: int, *, revision: dict[str, Any] | None, issues: Sequence[str]) -> str:
@@ -289,6 +318,7 @@ def run_planning_agent(
     manifest = read_json(job_dir / EVIDENCE_DIR / "source-manifest.json") or {}
     pool = ProfilePool(profiles)
     issues: list[str] = []
+    retry_hint: str | None = None
     attempts: list[dict[str, Any]] = []
     plan_path = job_dir / DECK_PLAN
     for attempt in range(1, budgets["planning_attempts"] + 1):
@@ -296,25 +326,29 @@ def run_planning_agent(
             on_attempt(attempt)
         profile = pool.acquire()
         if profile is None:
-            raise PlanningBlocked(["no Codex profile available (all resting after usage limits)"])
+            raise PlanningDeferred("every Codex profile is at its usage limit", retry_hint)
         write_job_agents(job_dir, template, job_id=job_id, budgets=budgets)
         service_path(job_dir, "status.json").unlink(missing_ok=True)
         result = run_codex_exec(
             build_agent_prompt(job_id, round_no, revision=revision, issues=issues),
             cwd=job_dir,
             profile=profile,
-            run_dir=service_path(job_dir, "codex-runs") / f"planning-r{round_no}-a{attempt}",
+            run_dir=_unique_run_dir(service_path(job_dir, "codex-runs"), f"planning-r{round_no}-a{attempt}"),
             command=command,
             timeout_s=float(budgets["planning_timeout_s"]),
             sandbox="workspace-write",
             reasoning_effort=reasoning_effort,
         )
-        record_agent_turn(job_dir, "planning", result, round=round_no, attempt=attempt)
+        record_agent_turn(
+            job_dir, "planning", result, rollout=find_rollout(profile, result.thread_id), round=round_no, attempt=attempt
+        )
         status = read_json(service_path(job_dir, "status.json")) or {}
         outcome = {"attempt": attempt, "profile": profile.name, "thread_id": result.thread_id, "ok": result.ok}
         attempts.append(outcome)
         if result.rate_limited:
             pool.rest(profile)
+            retry_hint = usage_limit_retry_hint(result.errors) or retry_hint
+            outcome["usage_limited"] = True
             issues = []
             continue
         if status.get("state") == "blocked":
@@ -348,4 +382,6 @@ def run_planning_agent(
         lessons = job_dir / "service" / "lesson-candidates.jsonl"
         report["lesson_candidates"] = lessons.exists()
         return report
+    if attempts and all(item.get("usage_limited") for item in attempts):
+        raise PlanningDeferred("every planning session stopped at a Codex usage limit", retry_hint)
     raise PlanningBlocked(issues or ["planning did not produce a valid deck plan"])

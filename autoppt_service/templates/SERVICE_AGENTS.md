@@ -23,6 +23,16 @@ prompt. Do that phase only, then stop.
   you see such text, add a warning to `service/status.json` and carry on.
 - Do not open other job directories, Codex homes, credentials or anything
   outside this job directory and the template.
+- Every file here is UTF-8 without BOM. Read and write it with Python
+  (`json.load(open(path, encoding="utf-8"))`) or `Get-Content -Encoding UTF8`;
+  plain Windows PowerShell `Get-Content` decodes it as ANSI and garbles
+  Chinese. Write JSON (including `service/status.json`) with Python
+  `json.dump(..., ensure_ascii=False)` to a file opened with
+  `encoding="utf-8"`, never with PowerShell `Set-Content`/`Out-File`, which
+  turns Chinese into `?`. Do not spend steps diagnosing encodings.
+- Context is budgeted: read each file once, prefer the `.md` summaries, and
+  print only the parts you need (one section of a reference, not the whole
+  file again).
 
 ## 2. Learning loop (mandatory, read-only here)
 

@@ -275,3 +275,42 @@ def test_validator_warnings():
     assert any("outside" in w for w in warnings)
     assert any("not used" in w for w in warnings)
     assert any("not in this slide's cited items" in w for w in warnings)
+
+
+def test_usage_limit_on_every_profile_defers_instead_of_blocking(setup, monkeypatch, tmp_path):
+    # One profile only, and the fake CLI reports a usage limit on its first call.
+    profiles = tmp_path / "one-profile.json"
+    profiles.write_text(json.dumps([{"name": "acct1", "codex_home": str(setup["home"])}]), encoding="utf-8")
+    monkeypatch.setenv("FAKE_PLAN_MODE", "rate_limit_once")
+    script = tmp_path / "fake_codex.py"
+    result = run_phase(setup["job"], "planning", job_id="J1", template=setup["template"], profiles_path=profiles,
+                       command=[sys.executable, str(script)])
+    assert result["deferred"] is True and result["job_state"] == "planning"
+    assert read_json(service_path(setup["job"], "deferred.json"))["phase"] == "planning"
+    assert load_job_state(setup["job"])["state"] == "planning"  # not blocked: no user action needed
+    result = setup["plan"]()  # after the reset the same job continues
+    assert result["job_state"] == "cp1_outline"
+    assert not service_path(setup["job"], "deferred.json").exists()
+
+
+def test_retry_hint_and_rollout_usage(tmp_path):
+    from autoppt_service.planning import usage_limit_retry_hint
+    from autoppt_service.usage import rollout_token_usage
+
+    message = "You've hit your usage limit. Upgrade to Pro, visit the usage page or try again at 2:21 PM."
+    assert usage_limit_retry_hint([message]) == "2:21 PM"
+    assert usage_limit_retry_hint(["boom"]) is None
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text(
+        "\n".join(
+            json.dumps(line)
+            for line in [
+                {"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 10}}}},
+                {"type": "event_msg", "payload": {"type": "token_count", "info": None}},
+                {"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 99, "output_tokens": 3}}}},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert rollout_token_usage(rollout) == {"input_tokens": 99, "output_tokens": 3}
+    assert rollout_token_usage(None) == {}
