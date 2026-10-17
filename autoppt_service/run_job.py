@@ -473,10 +473,76 @@ def phase_masters(job_dir: Path, *, mock: bool, profiles_path: Path | None = Non
     return {"phase": "masters", "job_state": state["state"], "masters": len(masters)}
 
 
-def phase_reconstruct(job_dir: Path, *, mock: bool) -> dict[str, Any]:
+def _real_reconstruct(
+    job_dir: Path, state: dict[str, Any], *, job_id: str, template: Path | None, profiles_path: Path | None,
+    command: Sequence[str] | None, reasoning_effort: str | None, renderer: Any = None,
+) -> dict[str, Any]:
+    from autoppt_service.codex_exec import load_profiles
+    from autoppt_service.reconstruct import ReconstructBlocked, ReconstructDeferred, run_reconstruct_agent
+    from autoppt_service.vectorize import powerpoint_renderer
+
+    template = _resolve_template(template)
+    round_no = _round(job_dir, "native_preview")
+    previous = _last_response(job_dir, "native_preview")
+    revision = previous if previous and previous["decision"] == "revise" else None
+    with phase_timer(job_dir, "reconstruct", round=round_no):
+        try:
+            report = run_reconstruct_agent(
+                job_dir, job_id=job_id, template=template, profiles=load_profiles(profiles_path),
+                renderer=renderer or powerpoint_renderer, round_no=round_no, revision=revision,
+                command=command, reasoning_effort=reasoning_effort,
+            )
+        except ReconstructDeferred as exc:
+            write_json_atomic(service_path(job_dir, "deferred.json"),
+                              {"phase": "reconstruct", "reason": exc.message, "retry_after": exc.retry_after, "at": utc_now()})
+            return {"phase": "reconstruct", "job_state": state["state"], "deferred": True,
+                    "reason": exc.message, "retry_after": exc.retry_after}
+        except ReconstructBlocked as exc:
+            state = transition(state, "blocked", reason="reconstruct: " + "; ".join(exc.issues)[:980])
+            save_job_state(job_dir, state)
+            return {"phase": "reconstruct", "job_state": state["state"], "issues": exc.issues}
+        if state["state"] == "reconstructing":
+            state = transition(state, "office_qa", reason="deck audited and rendered")
+            save_job_state(job_dir, state)
+        masters = discover_slides(job_dir / MASTERS_DIR)
+        natives = {sid: Path(path) for sid, path in report["renders"].items()}
+        previews = build_native_previews(job_dir, masters, natives)
+        summary = f"{len(natives)} slides rebuilt"
+        if report["warnings"]:
+            summary += "; please check: " + "; ".join(report["warnings"])
+        state = _checkpoint_or_advance(
+            job_dir,
+            state,
+            lambda: {
+                "checkpoint_id": f"cp3-native-r{round_no}",
+                "type": "native_preview",
+                "round": round_no,
+                "summary": summary[:4000],
+                "previews": checkpoint_previews(previews),
+                "questions": [{"question_id": "accept_native", "text": "是否接受原生版与母版之间的非文字差异？", "kind": "approve"}],
+                "master_sha256": {slide_id: sha256_file(path) for slide_id, path in masters.items()},
+                "editability_scope": report["editability_scope"],
+            },
+            "office QA done",
+        )
+    return {"phase": "reconstruct", "job_state": state["state"], "warnings": report["warnings"]}
+
+
+def phase_reconstruct(
+    job_dir: Path,
+    *,
+    mock: bool,
+    job_id: str = "",
+    template: Path | None = None,
+    profiles_path: Path | None = None,
+    command: Sequence[str] | None = None,
+    reasoning_effort: str | None = None,
+    renderer: Any = None,
+) -> dict[str, Any]:
     state = _enter(job_dir, "reconstruct")
     if not mock:
-        raise PhaseNotReady("native reconstruction is not enabled yet (needs its SERVICE_AGENTS.md section and an Office worker)")
+        return _real_reconstruct(job_dir, state, job_id=job_id, template=template, profiles_path=profiles_path,
+                                 command=command, reasoning_effort=reasoning_effort, renderer=renderer)
     request = read_json(service_path(job_dir, "job-request.json"))
     slide_brief = read_json(job_dir / HANDOFF_DIR / "slide_brief.json")
     if not slide_brief:
@@ -616,7 +682,8 @@ def run_phase(
     if phase == "masters":
         return phase_masters(job_dir, mock=mock, profiles_path=profiles_path)
     if phase == "reconstruct":
-        return phase_reconstruct(job_dir, mock=mock)
+        return phase_reconstruct(job_dir, mock=mock, job_id=job_id, template=template, profiles_path=profiles_path,
+                                 command=command, reasoning_effort=reasoning_effort)
     if phase == "package":
         return phase_package(job_dir, job_id=job_id, mock=mock)
     raise PhaseError(f"unknown phase {phase}")

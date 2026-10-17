@@ -86,7 +86,8 @@ approve anything yourself. The service never promises pixel identity.
 ## 5. Budgets
 
 Each phase has a time limit and a limited number of repair rounds:
-planning {{PLANNING_TIMEOUT_MIN}} minutes per session, {{PLANNING_ATTEMPTS}} sessions in total
+planning {{PLANNING_TIMEOUT_MIN}} minutes per session, {{PLANNING_ATTEMPTS}} sessions in total;
+reconstruct {{RECONSTRUCT_TIMEOUT_MIN}} minutes per session, {{RECONSTRUCT_ATTEMPTS}} sessions in total
 (the Worker sends validation issues back in the next session). When you
 are close to the limit or cannot make progress: save what you have, write
 `blocked` with what is missing, and stop. Never loop on the same failed
@@ -155,9 +156,45 @@ Do not write `image-prompts.json`, `deck-spec.json` or the checkpoint; the
 Worker builds them from your plan with the workflow's prompt builder. Finish
 by writing `service/status.json` with `"phase": "planning", "state": "done"`.
 
-## 7. Other phases
+## 7. Phase: reconstruct
 
-Masters (ImageGen) and packaging are run by the Worker. The native
-reconstruction phase will be specified here when it is enabled; until then a
-session started for it writes `blocked` with the reason "reconstruction
-phase not enabled" and stops.
+Goal: an editable PowerPoint deck that reproduces every frozen master in
+`assets/slides/Sxx.png` (ImageGen masters for new decks; the user's own pages,
+`user_supplied_master`, for vectorization). The user approves it at CP3 after
+seeing PowerPoint renders side by side with the masters.
+
+Read first: `{{TEMPLATE_ROOT}}/autopptskills/references/image-to-editable-pptx.md`,
+`measured-reconstruction.md`, `vectorization-failure-playbook.md`, and the v66
+benchmark. Use the template's scripts (for example
+`compose_measured_reconstruction.py`, `component_manifest_qa.py`) by running
+them from `{{TEMPLATE_ROOT}}`; never edit them.
+
+The exact visible text is fixed and reviewed:
+`workspace/presentation_handoff/deck-plan.json` (`exact_text` per slide) for new
+decks, `workspace/vectorize/reviewed-text.json` for vectorization. Reproduce it
+character for character as native text; OCR may suggest positions but never
+wording.
+
+Write:
+
+- `output/native-deck.pptx`: one slide per master, same order, 16:9.
+  Ordinary text, titles, labels and table text are native text boxes in
+  Microsoft YaHei (DengXian as fallback). Cards, lines, arrows, nodes and simple
+  diagrams are native shapes. Data plots from `chart-data.json` are real
+  PowerPoint charts with an embedded workbook. Photos, complex scientific
+  artwork and stylised art text stay bounded movable pictures (when the order
+  says keep photos as images). One continuous background is allowed; it must
+  not contain the old lettering. Never put a picture of the whole master on a
+  slide, never cover the slide with raster tiles, never hide text.
+- `workspace/reconstruct/reconstruction-report.json`: `route`, per slide the
+  native objects and every raster asset with the reason it is not native,
+  `disclosures` (what differs from the master and why), `learning_context`.
+
+Do not open PowerPoint or any Office application; the Worker renders the deck,
+audits it (slide count, every reviewed text line native on its slide, real
+charts when there is chart data) and sends problems back to you. Finish with
+`service/status.json` `"phase": "reconstruct", "state": "done"`.
+
+## 8. Other phases
+
+Masters (ImageGen) and packaging are run by the Worker.

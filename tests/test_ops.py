@@ -155,3 +155,20 @@ def test_worker_crash_mid_phase_is_recovered_by_another_worker_without_double_ch
     planning_charges = [row for row in credits(api, user)["statement"] if row["kind"] == "settle"]
     assert len(planning_charges) == 1  # planning settled exactly once
     ledger_ok(api)
+
+
+def test_reconstruction_needs_both_codex_and_office(api, world):
+    from autoppt_api.models import Job
+
+    admin = world["admin"]
+    office_only = api.post("/api/admin/workers", json={"name": "office-only", "capabilities": ["office"]}, headers=admin).json()
+    full = api.post("/api/admin/workers", json={"name": "full", "capabilities": ["codex", "office"]}, headers=admin).json()
+    job = api.post("/api/jobs", json={"request": request_body(world["sha"])}, headers=world["user"]).json()
+    total = api.post(f"/api/jobs/{job['id']}/estimate", headers=world["user"]).json()["total"]
+    api.post(f"/api/jobs/{job['id']}/submit", json={"confirm_total": total}, headers=world["user"])
+    with api.app.state.session_factory() as session:
+        row = session.get(Job, job["id"])
+        row.state, row.pending_phase = "reconstructing", "reconstruct"
+        session.commit()
+    assert api.post("/api/worker/lease", json={}, headers={"Authorization": f"Bearer {office_only['token']}"}).status_code == 204
+    assert api.post("/api/worker/lease", json={}, headers={"Authorization": f"Bearer {full['token']}"}).json()["phase"] == "reconstruct"

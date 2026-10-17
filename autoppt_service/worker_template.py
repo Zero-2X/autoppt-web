@@ -54,7 +54,8 @@ TEXT_SUFFIXES = {".md", ".json", ".jsonl", ".yaml", ".yml", ".txt"}
 CODE_SUFFIXES = {".py", ".ps1", ".mjs", ".js", ".ts", ".sh"}
 SKILL_NAME = "autopptskills"
 
-DEFAULT_BUDGETS = {"planning_timeout_s": 1800, "planning_attempts": 2}
+DEFAULT_BUDGETS = {"planning_timeout_s": 1800, "planning_attempts": 2,
+                   "reconstruct_timeout_s": 4 * 3600, "reconstruct_attempts": 3}
 
 
 class TemplateError(RuntimeError):
@@ -302,6 +303,8 @@ def render_service_agents(template: Path, *, job_id: str, budgets: dict[str, int
         "JOB_ID": job_id,
         "PLANNING_TIMEOUT_MIN": str(budgets["planning_timeout_s"] // 60),
         "PLANNING_ATTEMPTS": str(budgets["planning_attempts"]),
+        "RECONSTRUCT_TIMEOUT_MIN": str(budgets["reconstruct_timeout_s"] // 60),
+        "RECONSTRUCT_ATTEMPTS": str(budgets["reconstruct_attempts"]),
     }
     text = (template / "SERVICE_AGENTS.md").read_text(encoding="utf-8")
     for key, value in values.items():

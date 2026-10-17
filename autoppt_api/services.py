@@ -45,7 +45,9 @@ from autoppt_service.status import CHECKPOINT_STATES, PHASE_STATES, REWORK_EDGES
 
 PHASE_FOR_STATE = {state: phase for phase, states in PHASE_STATES.items() for state in states}
 PHASE_FOR_STATE["queued"] = "intake"
-PHASE_CAPABILITY = {"intake": "intake", "planning": "codex", "masters": "codex", "reconstruct": "office", "package": "package"}
+# Capabilities a worker needs for each phase (reconstruction runs the agent and then PowerPoint).
+PHASE_CAPABILITY = {"intake": ("intake", "office"), "planning": ("codex",), "masters": ("codex",),
+                    "reconstruct": ("codex", "office"), "package": ("package",)}
 REWORK_AFTER_ANSWER = {"cp1_outline": "planning", "cp2_masters": "masters", "cp3_native_preview": "reconstructing"}
 MAX_PHASE_ATTEMPTS = 3
 DEFER_FALLBACK = timedelta(minutes=15)
@@ -258,7 +260,10 @@ def lease_job(session: Session, worker: Worker, *, timeout_s: int) -> Job | None
         .limit(50)
     ).all()
     for job in candidates:
-        if "all" not in capabilities and PHASE_CAPABILITY[job.pending_phase] not in capabilities:
+        needed = PHASE_CAPABILITY[job.pending_phase]
+        if job.pending_phase == "intake" and job.service != "vectorize":
+            needed = ("intake",)  # only vectorization renders PowerPoint pages at intake
+        if "all" not in capabilities and not set(needed) <= capabilities:
             continue
         if job.not_before and aware(job.not_before) > current:
             continue

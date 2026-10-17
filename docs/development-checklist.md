@@ -345,7 +345,7 @@ draft → estimated → paid(积分冻结) → queued → intake → planning
   - [x] 写明每阶段的预算、轮数上限，以及达到上限时的收尾方式（保存产物，写 `blocked`）；目前只有 planning 的预算（每次 30 分钟、共 2 次）
   - [x] 明确交付层级的用词，禁止把低层级的证据当作高层级成果对外宣称
   - [x] planning 阶段契约：代理只写 `deck-plan.json`；Worker 校验（证据 id、封面原文、必须包含/避免、证据中不存在的数字、页数范围、经验记录），不通过时把问题发回再跑一次，仍不通过则 `blocked`；通过后用原仓库 `build_imagegen_prompt_manifest.build` 生成 `deck-spec.json` 和 `image-prompts.json`，并由 Worker 打开 CP1
-  - [ ] reconstruct 阶段的指令和预算（需要 Office Worker）
+  - [x] reconstruct 阶段的指令和预算（每次 4 小时、共 3 次）
 - [x] Worker 模板构建脚本 `worker_template.py`：按白名单导出 `autopptskills/`、`autoppt_workflow/`、`scripts/`、
       经脱敏的 `improvement/`、必要的 `docs/`，把 skill 安装到每个账号的 `CODEX_HOME/skills/`；**排除**
       `deliverables/`、`reviews/`、`runs/`、`交付/`、`智搬小匠_*`、`.tmp/`、根目录的大 PPTX
@@ -355,7 +355,10 @@ draft → estimated → paid(积分冻结) → queued → intake → planning
 - [ ] 本地命令 `python -m autoppt_service.run_job <job-request.json> --phase planning|masters|reconstruct|package`，在一台 Windows 机器上用 `codex exec` 依次跑完各阶段（masters 阶段直接调用已完成的出图步骤），检查点之间人工写入回复
   - [x] 命令、阶段驱动、`--respond` 写入回复、`--mock` 全流程已完成；真实路线已接通 intake、masters（读任务根目录的 `image-prompts.json`）和图片版打包（调用原仓库 `build_image_deck.py`）
   - [x] 真实 planning 已接通（`--template`、`--profiles`；Codex 以 `-s workspace-write` 加 restricted-token 沙箱运行，不开 `--search`；沙箱实测见 [安全模型](security-model.md)）；2026-10-17 用真实账号跑通一份样例到 CP1（7.7 分钟，约 69 万输入 / 1.1 万输出 token，校验一次通过），见 [实测记录](p1-real-planning-run.md)；账号限额时任务延后而不是 blocked
-  - [ ] 真实 reconstruct 依赖 Office Worker，目前返回“未就绪”（退出码 3）；4:3 画幅在 planning 阶段 `blocked`（原仓库提示词构建器只支持 16:9）
+  - [x] 真实 reconstruct 已接通（`reconstruct.py`）：代理按 SERVICE_AGENTS.md 第 7 节写 `output/native-deck.pptx`，不碰 Office；Worker 在 Office 锁下审核
+        （页数、每条已审核文字必须是原生文字、整页图片不算可编辑、有图表数据时必须是带工作簿的真图表）、用 PowerPoint 渲染、把问题发回或打开 CP3；
+        用假代理测试过，**尚未用真实 Codex + PowerPoint 跑过**（耗时和额度较大，需要先确认）
+  - [ ] 4:3 画幅在 planning 阶段 `blocked`（原仓库提示词构建器只支持 16:9）
 - [ ] 准备 3–5 份脱敏样例（论文答辩、国自然申请、组会报告、纯描述无文档、矢量化），逐份实跑
 - [ ] 记录每份样例的耗时、费用、轮数、失败点，据此定价和设定各阶段预算
 - [x] 给新模块补 pytest 用例；`--mock` 路径跑通全流程（供后端联调）：`python -m autoppt_service.run_job req.json --job-dir <dir> --job-id J1 --uploads uploads.json --phase all --mock --auto-respond`
@@ -469,7 +472,7 @@ CP3 管理员不能代批）、取消、系统失败退款、可重试失败退�
 - [x] OCR 后进入 CP-V 文字核对，生成已审核的精确文字清单（Windows OCR，`windows_ocr_layout.ps1`；
       中文逐字空格已合并；用户逐行改正、删除、补充；`reviewed-text.json` 之后不再被 OCR 覆盖）
 - [x] 选项：可编辑深度（文字 / 加形状 / 加图表）、照片保留为图片、页码选择（`vectorize` 字段）；页数超过订单时任务暂停并说明
-- [ ] 复用原生重建与 Office 验收流程，经 CP3 批准后交付（流程已接通，mock 可跑通；真实的原生重建阶段还没有实现，同 P1）
+- [x] 复用原生重建与 Office 验收流程，经 CP3 批准后交付（矢量化任务的已审核文字作为原生文字的核对依据；真实运行同 P1，尚未实跑）
 - [x] 前端增加矢量化专用向导和文字核对界面（向导第 ③ 步的矢量化选项；CP-V 页面左侧原页、右侧可编辑文字）
 
 **验收**：3 份外部图片版 PPT 跑到 CP3，验证结果和披露说明完整。
