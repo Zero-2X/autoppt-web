@@ -262,6 +262,8 @@ def lease_job(session: Session, worker: Worker, *, timeout_s: int) -> Job | None
             continue
         if job.not_before and aware(job.not_before) > current:
             continue
+        if job.template_version and worker.template_version and job.template_version != worker.template_version:
+            continue  # a started job stays on the template version it began with (reproducible, rollback-safe)
         expires = aware(job.lease_expires_at)
         if expires and expires > current:
             continue

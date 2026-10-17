@@ -862,6 +862,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         audit(session, "admin", admin.id, "lesson.review", lesson_id, status=body.status)
         return {"id": lesson.id, "status": lesson.status}
 
+    @app.get("/api/admin/health")
+    def admin_health(_admin: User = Depends(admin_user), session: Session = Depends(db)) -> dict[str, Any]:
+        from autoppt_api.monitoring import health
+
+        return health(session, lease_timeout_s=settings.lease_timeout_s)
+
     @app.get("/api/admin/ledger/check")
     def admin_ledger(_admin: User = Depends(admin_user), session: Session = Depends(db)) -> dict[str, Any]:
         issues = ledger.check_ledger(session)

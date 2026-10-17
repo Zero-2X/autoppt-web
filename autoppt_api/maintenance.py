@@ -1,6 +1,6 @@
 """Periodic jobs: send notifications, purge expired data, check the ledger.
 
-    python -m autoppt_api.maintenance notify|purge|expire|reconcile|ledger|all
+    python -m autoppt_api.maintenance notify|purge|expire|reconcile|alerts|ledger|all
 
 Run from a scheduler (cron / Windows Task Scheduler) every few minutes.
 Notifications go through SMTP when ``AUTOPPT_API_SMTP_URL`` is set
@@ -85,7 +85,7 @@ def send_notifications(session: Session, smtp_url: str, *, sender: str = "AutoPP
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("task", choices=["notify", "purge", "expire", "reconcile", "ledger", "all"])
+    parser.add_argument("task", choices=["notify", "purge", "expire", "reconcile", "alerts", "ledger", "all"])
     args = parser.parse_args(argv)
     settings = Settings()
     engine = make_engine(settings.database_url)
@@ -96,7 +96,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.task in ("notify", "all"):
             result["notified"] = send_notifications(session, settings.smtp_url)
         if args.task in ("purge", "all"):
+            from autoppt_api.lifecycle import purge_intermediate
+
+            result["purged_intermediate_artifacts"] = purge_intermediate(session, LocalStorage(settings.storage_dir))
             result["purged_jobs"] = purge_expired(session, LocalStorage(settings.storage_dir))
+        if args.task in ("alerts", "all"):
+            from autoppt_api.monitoring import health, notify_admins
+
+            report = health(session)
+            result["alerts"] = report["alerts"]
+            notify_admins(session, report)
         if args.task in ("expire", "all"):
             result["expired_lots"] = ledger.expire_lots(session)
         if args.task in ("reconcile", "all"):

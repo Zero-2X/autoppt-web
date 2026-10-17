@@ -37,7 +37,9 @@ from autoppt_service.parsers.archive import safe_member_path
 from autoppt_service.run_job import PhaseError, PhaseNotReady, run_phase
 from autoppt_service.status import CHECKPOINT_STATES, load_job_state
 
-SNAPSHOT_EXCLUDE = ("service/codex-scratch/", "service/.snapshot-sha256")
+SNAPSHOT_EXCLUDE = ("service/codex-scratch/", "service/.snapshot-sha256", "tmp/")
+PHASE_TIMEOUTS_S = {"intake": 1800, "planning": 3 * 3600, "masters": 6 * 3600, "reconstruct": 12 * 3600, "package": 3600}
+FINISHED_STATES = ("delivered", "failed", "cancelled")
 SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024 * 1024
 
 
@@ -93,6 +95,9 @@ class ApiWorker:
         template_version: str = "",
         heartbeat_s: float = 60.0,
         command: Sequence[str] | None = None,
+        min_free_gb: float = 10.0,
+        phase_timeouts: dict[str, float] | None = None,
+        cleanup_local: bool = True,
     ) -> None:
         self.http = http  # httpx.Client or a FastAPI TestClient
         self.headers = {"Authorization": f"Bearer {token}"}
@@ -101,6 +106,9 @@ class ApiWorker:
         self.template_version = template_version
         self.heartbeat_s = heartbeat_s
         self.command = command
+        self.min_free_gb = min_free_gb
+        self.phase_timeouts = {**PHASE_TIMEOUTS_S, **(phase_timeouts or {})}
+        self.cleanup_local = cleanup_local
 
     # ------------------------------------------------------------ http helpers
 
@@ -132,6 +140,12 @@ class ApiWorker:
     # ------------------------------------------------------------ one lease
 
     def run_once(self) -> dict[str, Any] | None:
+        from autoppt_service.watchdog import disk_ok
+
+        enough, free = disk_ok(self.jobs_root, self.min_free_gb)
+        if not enough:
+            # Never start a phase that could fill the disk (Office renders and snapshots are large).
+            return {"skipped": "disk_low", "free_gb": round(free, 1)}
         lease = self._post("/api/worker/lease", {"template_version": self.template_version})
         if lease is None:
             return None
@@ -143,11 +157,20 @@ class ApiWorker:
         try:
             self._prepare(job_dir, lease)
             uploads = self._fetch_uploads(job_dir, lease) if phase == "intake" else {}
-            result = run_phase(
-                job_dir, phase, job_id=job_id, mock=self.mock, request=lease["request"], uploads=uploads,
-                profiles_path=self.profiles, template=self.template, command=self.command,
-            )
+            from autoppt_service.watchdog import guarded_phase
+
+            with guarded_phase(job_dir, timeout_s=self.phase_timeouts.get(phase, 3600)) as watchdog:
+                result = run_phase(
+                    job_dir, phase, job_id=job_id, mock=self.mock, request=lease["request"], uploads=uploads,
+                    profiles_path=self.profiles, template=self.template, command=self.command,
+                )
+            if watchdog["killed"]:
+                result = {**result, "reason": f"watchdog stopped {', '.join(watchdog['killed'])}"}
             report = self._report(job_dir, job_id, phase, lease_token, result)
+            if self.cleanup_local and report["job_state"] in FINISHED_STATES:
+                # The backend keeps the snapshot and deliverables; nothing of the job stays on this machine.
+                shutil.rmtree(job_dir, ignore_errors=True)
+                shutil.rmtree(job_dir.parent / f"{job_dir.name}._uploads", ignore_errors=True)
         except (PhaseNotReady, PhaseError) as exc:
             stop.set()
             self._post(f"/api/worker/jobs/{job_id}/fail", {"lease_token": lease_token, "error": str(exc), "retryable": False},

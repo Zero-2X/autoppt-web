@@ -60,6 +60,26 @@ def delete_job_data(session: Session, storage: LocalStorage, job: Job, *, actor_
     return removed
 
 
+def purge_intermediate(session: Session, storage: LocalStorage, *, days: int = 7) -> int:
+    """Drop snapshots and previews of finished jobs after ``days``; deliverables follow the retention period."""
+    cutoff = now() - timedelta(days=days)
+    removed = 0
+    finished = select(Job.id).where(Job.finished_at.is_not(None), Job.finished_at <= cutoff)
+    for artifact in session.scalars(select(Artifact).where(Artifact.job_id.in_(finished), Artifact.kind.in_(("snapshot", "preview")))).all():
+        sha = artifact.sha256
+        session.delete(artifact)
+        session.flush()
+        if not _blob_in_use(session, sha):
+            stored = session.get(StoredFile, sha)
+            if stored is not None:
+                storage.delete(stored.storage_key)
+                session.delete(stored)
+        removed += 1
+    for job in session.scalars(select(Job).where(Job.id.in_(finished), Job.snapshot_artifact_id.is_not(None))):
+        job.snapshot_artifact_id = None
+    return removed
+
+
 def purge_expired(session: Session, storage: LocalStorage) -> list[str]:
     """Delete finished jobs whose retention period (3/7/30 days after finishing) has passed."""
     current = now()

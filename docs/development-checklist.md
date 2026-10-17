@@ -478,17 +478,25 @@ CP3 管理员不能代批）、取消、系统失败退款、可重试失败退�
 
 ### P6 Worker 集群与运维
 
-- [ ] Worker 镜像或安装脚本：Windows、Office、微软雅黑与等线字体、Python venv、Node、
+- [x] Worker 镜像或安装脚本：Windows、Office、微软雅黑与等线字体、Python venv、Node、
       pywin32、openpyxl；运行 `check_editable_backends.py` 自检后才上线接单
-- [ ] 每台机器同一时间只跑一个 Office 任务。规划阶段这类不需要 Office 的工作，以后可以拆到 Linux 机器上
-- [ ] 看门狗：PowerPoint 或 Excel 卡死时结束进程、回收 COM 对象；任务超时就中止；
-      `TEMP`/`TMP` 指向任务目录；监控磁盘空间（仓库已有 RPC 失败和磁盘不足的教训）
-- [ ] 任务隔离：每个任务一个独立目录，跑完上传产物后清理；条件允许时每个任务从虚拟机快照还原
-- [ ] 产物同步：阶段结束时上传，中间产物 7 天后清理（单任务约 0.7 GB），交付物按用户选择的保留期删除
-- [ ] 监控与告警：队列积压、任务卡住、失败率、单任务费用超标、Key 额度不足、Worker 掉线
-- [ ] 灰度与版本：Worker 模板固定版本号，任务记录所用版本，方便复现和回滚
+  - `scripts/install_worker.ps1`：建 venv、装两个仓库的依赖、运行自检、注册“登录时启动”的计划任务（不做 Windows 服务，Session 0 下 PowerPoint COM 会失败）；
+    Office、字体、Node、Codex CLI 需事先装好（脚本未在本机执行，因为它会注册计划任务）
+  - `python -m autoppt_service.worker_check`：Python 与依赖、Codex CLI ≥ 0.163.0、模板未被改动、账号目录、磁盘、PowerPoint COM、两种字体、
+    Windows 中文 OCR、Node，可选调用原仓库 `check_editable_backends.py`；按结果决定 Worker 能力（intake/package/codex/office）
+- [x] 每台机器同一时间只跑一个 Office 任务（机器级 Office 锁，进程崩溃后可接管）。规划阶段这类不需要 Office 的工作，以后可以拆到 Linux 机器上（按能力分派已支持）
+- [x] 看门狗：PowerPoint 或 Excel 卡死时结束进程、回收 COM 对象；任务超时就中止；
+      `TEMP`/`TMP` 指向任务目录；监控磁盘空间（`autoppt_service/watchdog.py`：按阶段设时限，超时结束本阶段启动的 Office 进程；
+      阶段结束清理残留进程；磁盘不足时不领新任务）
+- [x] 任务隔离：每个任务一个独立目录，跑完上传产物后清理（交付、失败、取消后删除本机副本）；条件允许时每个任务从虚拟机快照还原（未做）
+- [x] 产物同步：阶段结束时上传，中间产物 7 天后清理（快照和预览），交付物按用户选择的保留期删除
+- [x] 监控与告警：队列积压、任务卡住、失败率、Worker 掉线、账号限额延后（`/api/admin/health`；`maintenance alerts` 给管理员发通知）
+  - [ ] 单任务费用超标告警：等 P1 实测费率后接入
+- [x] 灰度与版本：Worker 模板固定版本号，任务记录所用版本；已开始的任务只交给同版本的 Worker
 
 **验收**：连续 48 小时压力测试中，Office 卡死能自动恢复，没有任务丢失或重复扣费。
+**2026-10-17 状态**：未做 48 小时压力测试。已有自动化用例（`tests/test_ops.py`）：Worker 在阶段中途崩溃后租约过期，另一台空机器从快照恢复
+并继续，阶段只结算一次；看门狗超时会结束卡住的进程；磁盘不足时不领任务；模板版本不同时不领已开始的任务。
 
 ### P7 安全与隐私
 
