@@ -229,6 +229,54 @@ def generate_masters(
     return report
 
 
+NUMBER_GUARD = ("Do not show any number, ratio, multiple or percentage that is not written in the exact on-slide "
+                "text above; do not compute or derive new figures.")
+
+
+def prepare_redo(workspace: Path, slide_ids: Sequence[str], notes: dict[str, str], *, round_no: int) -> list[str]:
+    """Reopen slides rejected at master review with the reviewer's correction added to their prompt.
+
+    The rejected master is archived under ``assets/slides/_rejected/``; the slide's prompt in the
+    handoff and in ``image-prompts.json`` gets a revision block (so the verbatim-prompt check
+    applies to the revised prompt) and its status goes back to pending.  Returns the reopened ids.
+    """
+    import hashlib
+    import shutil
+
+    workspace = Path(workspace)
+    handoff_path = workspace / "builtin-imagegen-handoff.json"
+    prompts_path = workspace / "image-prompts.json"
+    handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+    prompts = json.loads(prompts_path.read_text(encoding="utf-8-sig"))
+    wanted = set(slide_ids)
+    reopened = []
+    for slide in handoff["slides"]:
+        if slide["slide_id"] not in wanted:
+            continue
+        note = notes.get(slide["slide_id"], "").strip() or "Fix what the reviewer rejected."
+        delta = f"\n\nRevision requested at master review round {round_no}: {note}\n{NUMBER_GUARD}"
+        current = workspace / slide["final_path"]
+        if current.exists():
+            archive = workspace / "assets" / "slides" / "_rejected" / f"{slide['slide_id']}-r{round_no}{current.suffix}"
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(current, archive)
+        slide.setdefault("revisions", []).append({
+            "round": round_no, "note": note, "previous_imagegen_id": slide.get("imagegen_id"),
+            "previous_sha256": slide.get("sha256"), "at": _utc_now(),
+        })
+        slide["prompt"] = f"{slide['prompt']}{delta}"
+        slide["prompt_sha256"] = hashlib.sha256(slide["prompt"].encode("utf-8")).hexdigest()
+        slide["status"] = "pending"
+        for item in prompts.get("slides", []):
+            if str(item.get("slide_id")) == slide["slide_id"]:
+                item["prompt_zh"] = slide["prompt"]
+                item["retry_prompt_delta"] = delta.strip()
+        reopened.append(slide["slide_id"])
+    handoff_path.write_text(json.dumps(handoff, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    prompts_path.write_text(json.dumps(prompts, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return reopened
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("prompts", help="image-prompts.json of the run workspace")

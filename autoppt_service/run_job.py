@@ -471,6 +471,13 @@ def phase_masters(job_dir: Path, *, mock: bool, profiles_path: Path | None = Non
             prompts = job_dir / "image-prompts.json"
             if not prompts.exists():
                 raise PhaseNotReady("masters needs image-prompts.json at the job root (written by planning)")
+            if redo:
+                from autoppt_service.codex_imagegen_step import prepare_redo
+
+                notes = {a.get("slide_id"): a["text"] for a in previous.get("annotations", []) if a.get("slide_id")}
+                for slide_id in redo:
+                    notes.setdefault(slide_id, previous.get("user_reply", ""))
+                prepare_redo(job_dir, sorted(redo), notes, round_no=_round(job_dir, "masters") - 1)
             report = generate_masters(prompts, profiles=load_profiles(profiles_path), slide_ids=sorted(redo) or None)
             if report["handoff_verdict"] != "pass":
                 state = transition(state, "blocked", reason="; ".join(report["handoff_issues"])[:1000] or "masters blocked")

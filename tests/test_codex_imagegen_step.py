@@ -173,3 +173,25 @@ def test_marker_included_is_rejected_and_the_retry_names_the_cause(tmp_path: Pat
     attempts = report["slides"][0]["attempts"]
     assert attempts[0]["status"] == "failed" and attempts[0]["issues"] == ["host_record_prompt_mismatch:S01:marker_included"]
     assert attempts[1]["status"] == "generated" and report["handoff_verdict"] == "pass"
+
+
+def test_redo_regenerates_only_rejected_slides_with_the_reviewers_note(tmp_path: Path, monkeypatch) -> None:
+    from autoppt_service.codex_imagegen_step import NUMBER_GUARD, prepare_redo
+
+    monkeypatch.setenv("FAKE_CODEX_MODE", "ok")
+    workspace = tmp_path / "job"
+    prompts = _prompts(workspace, 2)
+    generate_masters(prompts, profiles=_profiles(tmp_path, "a"), command=_fake_command(tmp_path))
+    before = json.loads((workspace / "builtin-imagegen-handoff.json").read_text(encoding="utf-8"))
+    first_s01 = before["slides"][0]["imagegen_id"]
+    assert prepare_redo(workspace, ["S02"], {"S02": "去掉“提升 2.6 倍”"}, round_no=1) == ["S02"]
+    assert (workspace / "assets/slides/_rejected/S02-r1.png").exists()
+    report = generate_masters(prompts, profiles=_profiles(tmp_path, "a"), command=_fake_command(tmp_path))
+    assert report["handoff_verdict"] == "pass"
+    after = json.loads((workspace / "builtin-imagegen-handoff.json").read_text(encoding="utf-8"))
+    s01, s02 = after["slides"]
+    assert s01["imagegen_id"] == first_s01  # untouched
+    assert "去掉“提升 2.6 倍”" in s02["prompt"] and NUMBER_GUARD in s02["prompt"]
+    assert s02["prompt_match"] == "exact" and s02["revisions"][0]["round"] == 1
+    manifest = json.loads(prompts.read_text(encoding="utf-8"))
+    assert manifest["slides"][1]["prompt_zh"] == s02["prompt"]
