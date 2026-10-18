@@ -34,6 +34,14 @@ class Settings:
         default_factory=lambda: tuple(e.strip().lower() for e in _env("ADMIN_EMAILS", "").split(",") if e.strip())
     )
     smtp_url: str = field(default_factory=lambda: _env("SMTP_URL", ""))
+    mail_sender: str = field(default_factory=lambda: _env("MAIL_SENDER", "AutoPPT <noreply@localhost>"))
+    # SMS for phone login and notifications: "" logs only, "webhook" posts to the operator's signed relay.
+    sms_provider: str = field(default_factory=lambda: _env("SMS_PROVIDER", ""))
+    sms_webhook_url: str = field(default_factory=lambda: _env("SMS_WEBHOOK_URL", ""))
+    sms_webhook_secret: str = field(default_factory=lambda: _env("SMS_WEBHOOK_SECRET", ""))
+    # WeChat website login (open.weixin.qq.com "网站应用"); disabled while empty.
+    wechat_app_id: str = field(default_factory=lambda: _env("WECHAT_APP_ID", ""))
+    wechat_app_secret: str = field(default_factory=lambda: _env("WECHAT_APP_SECRET", ""))
     # Malware scanner run on every new upload, e.g. "clamdscan --no-summary" (exit 1 = infected).
     scan_command: str = field(default_factory=lambda: _env("SCAN_COMMAND", ""))
     # Enables the signed mock payment provider (development and tests only).
@@ -47,3 +55,5 @@ class Settings:
             # A random key per process is fine for tests and local runs; production must set one.
             self.secret_key = secrets.token_urlsafe(48)
         self.storage_dir = Path(self.storage_dir)
+        if self.sms_provider == "webhook" and not (self.sms_webhook_url and self.sms_webhook_secret):
+            raise ValueError("AUTOPPT_API_SMS_PROVIDER=webhook needs SMS_WEBHOOK_URL and SMS_WEBHOOK_SECRET")

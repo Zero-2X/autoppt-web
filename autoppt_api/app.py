@@ -14,6 +14,7 @@ Routes:
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import mimetypes
@@ -25,8 +26,8 @@ from pathlib import Path
 from typing import Any
 
 import anyio
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -55,6 +56,7 @@ from autoppt_api.models import (
     Worker,
     now,
 )
+from autoppt_api.messaging import deliver_login_code, normalize_phone
 from autoppt_api.security import (
     TokenError,
     consume_login_code,
@@ -100,12 +102,18 @@ CSP = ("default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script
 
 
 class CodeRequest(BaseModel):
-    email: str
+    email: str | None = None
+    phone: str | None = None
 
 
 class LoginRequest(BaseModel):
-    email: str
+    email: str | None = None
+    phone: str | None = None
     code: str
+
+
+class TicketRequest(BaseModel):
+    ticket: str = Field(min_length=10, max_length=600)
 
 
 class RefreshRequest(BaseModel):
@@ -372,48 +380,118 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # ------------------------------------------------------------ auth
 
-    @app.post("/api/auth/code")
-    def request_code(body: CodeRequest, request: Request, session: Session = Depends(db)) -> dict[str, Any]:
+    def account_key(body: CodeRequest | LoginRequest) -> tuple[str, str | None, str | None]:
+        """``(code identity, email, phone)`` from a request that gives exactly one of email and phone."""
+        if bool(body.email) == bool(body.phone):
+            raise HTTPException(422, "give an email or a phone number")
         try:
-            email = normalize_email(body.email)
+            if body.phone:
+                phone = normalize_phone(body.phone)
+                return f"phone:{phone}", None, phone
+            email = normalize_email(body.email or "")
+            return email, email, None
         except ValueError as exc:
-            raise HTTPException(422, "invalid email") from exc
+            raise HTTPException(422, "invalid phone number" if body.phone else "invalid email") from exc
+
+    def signup(session: Session, **identity: Any) -> User:
+        user = User(**identity, is_admin=bool(identity.get("email")) and identity["email"] in settings.admin_emails)
+        session.add(user)
+        session.flush()
+        ledger.user_account(session, user.id)
+        if settings.signup_bonus_credits > 0:
+            ledger.credit_user(session, user.id, settings.signup_bonus_credits, kind="grant",
+                               business_key=f"signup:{user.id}", source="grants", memo="signup bonus",
+                               expires_in_days=settings.signup_bonus_expires_days)
+        audit(session, "user", user.id, "user.signup", user.id, via=next(iter(identity)))
+        return user
+
+    def tokens_for(session: Session, user: User) -> dict[str, Any]:
+        if user.status != "active":
+            raise HTTPException(403, "account disabled")
+        return issue_tokens(session, user.id, secret=settings.secret_key, access_ttl=settings.access_token_ttl_s,
+                            refresh_ttl=settings.refresh_token_ttl_s)
+
+    @app.post("/api/auth/code")
+    def request_code(body: CodeRequest, request: Request, background: BackgroundTasks,
+                     session: Session = Depends(db)) -> dict[str, Any]:
+        key, email, phone = account_key(body)
         ip = request.client.host if request.client else ""
-        if recent_codes(session, email=email) >= settings.login_codes_per_hour or recent_codes(session, ip=ip) >= settings.login_codes_per_hour * 4:
+        if recent_codes(session, email=key) >= settings.login_codes_per_hour or recent_codes(session, ip=ip) >= settings.login_codes_per_hour * 4:
             raise HTTPException(429, "too many codes requested; try again later")
-        code = create_login_code(session, email, ttl_s=settings.login_code_ttl_s, ip=ip)
-        user = session.scalars(select(User).where(User.email == email)).first()
-        if user is not None:
-            session.add(Notification(user_id=user.id, subject="AutoPPT 登录验证码", body=f"验证码 {code}，10 分钟内有效。"))
-        result: dict[str, Any] = {"sent": True, "expires_in": settings.login_code_ttl_s}
+        code = create_login_code(session, key, ttl_s=settings.login_code_ttl_s, ip=ip)
+        # Sent after the response, once this request's transaction has ended; the code is never stored in clear.
+        background.add_task(deliver_login_code, settings, email=email, phone=phone, code=code)
+        result: dict[str, Any] = {"sent": True, "expires_in": settings.login_code_ttl_s, "channel": "sms" if phone else "email"}
         if settings.dev_echo_codes:
             result["dev_code"] = code
         return result
 
     @app.post("/api/auth/login")
     def login(body: LoginRequest, session: Session = Depends(db)) -> dict[str, Any]:
-        try:
-            email = normalize_email(body.email)
-        except ValueError as exc:
-            raise HTTPException(422, "invalid email") from exc
-        if not consume_login_code(session, email, body.code, max_attempts=settings.login_code_max_attempts):
+        key, email, phone = account_key(body)
+        if not consume_login_code(session, key, body.code, max_attempts=settings.login_code_max_attempts):
             session.commit()  # keep the attempt count even though the request fails
             raise HTTPException(401, "invalid or expired code")
-        user = session.scalars(select(User).where(User.email == email)).first()
+        column = User.phone if phone else User.email
+        user = session.scalars(select(User).where(column == (phone or email))).first()
         if user is None:
-            user = User(email=email, is_admin=email in settings.admin_emails)
-            session.add(user)
-            session.flush()
-            ledger.user_account(session, user.id)
-            if settings.signup_bonus_credits > 0:
-                ledger.credit_user(session, user.id, settings.signup_bonus_credits, kind="grant",
-                                   business_key=f"signup:{user.id}", source="grants", memo="signup bonus",
-                                   expires_in_days=settings.signup_bonus_expires_days)
-            audit(session, "user", user.id, "user.signup", user.id)
-        if user.status != "active":
-            raise HTTPException(403, "account disabled")
-        return issue_tokens(session, user.id, secret=settings.secret_key, access_ttl=settings.access_token_ttl_s,
-                            refresh_ttl=settings.refresh_token_ttl_s)
+            user = signup(session, **({"phone": phone} if phone else {"email": email}))
+        return tokens_for(session, user)
+
+    @app.get("/api/auth/options")
+    def auth_options() -> dict[str, Any]:
+        return {"email": True, "phone": True, "wechat": bool(settings.wechat_app_id and settings.wechat_app_secret)}
+
+    @app.get("/api/auth/wechat/start")
+    def wechat_start() -> Response:
+        from autoppt_api.wechat import authorize_url
+
+        if not (settings.wechat_app_id and settings.wechat_app_secret):
+            raise HTTPException(404, "WeChat login is not configured")
+        nonce = secrets.token_urlsafe(16)
+        state = sign_url_token(settings.secret_key, purpose="wechat-state", ref=nonce, ttl_s=600)
+        callback = f"{settings.public_base_url.rstrip('/')}/api/auth/wechat/callback"
+        response = JSONResponse({"url": authorize_url(settings.wechat_app_id, callback, state)})
+        # The callback must come back to the browser that started the login (no login CSRF).
+        response.set_cookie("autoppt_wx", nonce, max_age=600, httponly=True, samesite="lax",
+                            secure=settings.public_base_url.startswith("https"))
+        return response
+
+    @app.get("/api/auth/wechat/callback")
+    def wechat_callback(request: Request, code: str = Query(...), state: str = Query(...),
+                        session: Session = Depends(db)) -> Response:
+        from autoppt_api.wechat import WeChatError, exchange_code
+
+        try:
+            nonce = verify_url_token(settings.secret_key, state, purpose="wechat-state")
+        except TokenError as exc:
+            raise HTTPException(403, f"bad state: {exc}") from exc
+        if not hmac.compare_digest(request.cookies.get("autoppt_wx", ""), nonce):
+            raise HTTPException(403, "this login was started in another browser")
+        try:
+            ids = exchange_code(settings.wechat_app_id, settings.wechat_app_secret, code,
+                                client=getattr(app.state, "wechat_http", None))
+        except WeChatError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        key = ids["unionid"] or f"openid:{ids['openid']}"
+        user = session.scalars(select(User).where(User.wechat_unionid == key)).first() or signup(session, wechat_unionid=key)
+        # A single-use, two-minute ticket instead of tokens in the URL (browser history, referrers).
+        ticket_secret = create_login_code(session, f"wechat-ticket:{user.id}", ttl_s=120)
+        ticket = sign_url_token(settings.secret_key, purpose="wechat-ticket", ref=f"{user.id}.{ticket_secret}", ttl_s=120)
+        response = RedirectResponse(f"/#/login?wechat_ticket={ticket}", status_code=303)
+        response.delete_cookie("autoppt_wx")
+        return response
+
+    @app.post("/api/auth/wechat/exchange")
+    def wechat_exchange(body: TicketRequest, session: Session = Depends(db)) -> dict[str, Any]:
+        try:
+            user_id, ticket_secret = verify_url_token(settings.secret_key, body.ticket, purpose="wechat-ticket").split(".", 1)
+        except (TokenError, ValueError) as exc:
+            raise HTTPException(401, "invalid or expired ticket") from exc
+        if not consume_login_code(session, f"wechat-ticket:{user_id}", ticket_secret, max_attempts=1):
+            session.commit()
+            raise HTTPException(401, "invalid or expired ticket")
+        return tokens_for(session, session.get(User, user_id))
 
     @app.post("/api/auth/refresh")
     def refresh(body: RefreshRequest, session: Session = Depends(db)) -> dict[str, Any]:
@@ -442,7 +520,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/me")
     def me(user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
         account = ledger.user_account(session, user.id)
-        return {"id": user.id, "email": user.email, "is_admin": user.is_admin, "locale": user.locale,
+        return {"id": user.id, "email": user.email, "phone": user.phone, "wechat": bool(user.wechat_unionid),
+                "is_admin": user.is_admin, "locale": user.locale,
                 "credits": {"balance": account.balance, "available": ledger.available(session, account)}}
 
     @app.get("/api/credits")
@@ -814,10 +893,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # ------------------------------------------------------------ admin
 
+    def find_account(session: Session, identifier: str) -> User | None:
+        """An account by email or (mainland) phone number, as typed by an administrator."""
+        try:
+            column, value = (User.email, normalize_email(identifier)) if "@" in identifier else (User.phone, normalize_phone(identifier))
+        except ValueError:
+            return None
+        return session.scalars(select(User).where(column == value)).first()
+
     @app.post("/api/admin/credits/adjust")
     def admin_adjust(body: AdjustBody, admin: User = Depends(admin_user), session: Session = Depends(db),
                      idempotency_key: str | None = Header(default=None)) -> dict[str, Any]:
-        user = session.scalars(select(User).where(User.email == normalize_email(body.email))).first()
+        user = find_account(session, body.email)
         if user is None:
             raise HTTPException(404, "user not found")
         key = f"adjust:{idempotency_key or secrets.token_hex(8)}"
@@ -856,11 +943,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def admin_users(email: str = "", _admin: User = Depends(admin_user), session: Session = Depends(db)) -> list[dict[str, Any]]:
         query = select(User).order_by(User.created_at.desc()).limit(100)
         if email:
-            query = query.where(User.email.contains(email.strip().lower()))
+            needle = email.strip().lower()
+            query = query.where(User.email.contains(needle) | User.phone.contains(needle.replace(" ", "")))
         result = []
         for user in session.scalars(query):
             account = ledger.user_account(session, user.id)
-            result.append({"id": user.id, "email": user.email, "is_admin": user.is_admin, "status": user.status,
+            result.append({"id": user.id, "email": user.email, "phone": user.phone, "wechat": bool(user.wechat_unionid),
+                           "is_admin": user.is_admin, "status": user.status,
                            "balance": account.balance, "available": ledger.available(session, account),
                            "created_at": iso(user.created_at)})
         return result

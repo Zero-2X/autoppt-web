@@ -206,31 +206,53 @@ async function pagePricing() {
       h("p", { class: "muted" }, "测试期不接在线支付：积分通过兑换码或管理员充值获得。")));
 }
 
+function accountBody(value) {
+  // One field for both: an address with "@" is an email, anything else a mainland mobile number.
+  const text = value.trim();
+  return text.includes("@") ? { email: text } : { phone: text };
+}
+
 async function pageLogin() {
-  const email = h("input", { type: "email", required: true, autocomplete: "email" });
+  const params = new URLSearchParams(location.hash.split("?")[1] || "");
+  const ticket = params.get("wechat_ticket");
+  if (ticket) {
+    try {
+      auth.set(await api.post("/api/auth/wechat/exchange", { ticket }));
+      me = null;
+      location.hash = "#/jobs";
+      return card(t("login"), notice(t("signIn")));
+    } catch (error) { return card(t("login"), errorBox(error)); }
+  }
+  const options = await api.get("/api/auth/options").catch(() => ({ wechat: false }));
+  const account = h("input", { required: true, autocomplete: "username", placeholder: t("accountHint") });
   const code = h("input", { inputmode: "numeric", maxlength: 6, autocomplete: "one-time-code" });
   const status = h("div");
   const send = async () => {
     fill(status, );
     try {
-      const reply = await api.post("/api/auth/code", { email: email.value });
-      fill(status, notice(reply.dev_code ? `${t("codeSent")}（开发模式验证码：${reply.dev_code}）` : t("codeSent")));
+      const reply = await api.post("/api/auth/code", accountBody(account.value));
+      const sent = reply.channel === "sms" ? t("codeSentSms") : t("codeSent");
+      fill(status, notice(reply.dev_code ? `${sent}（开发模式验证码：${reply.dev_code}）` : sent));
       code.focus();
     } catch (error) { fill(status, errorBox(error)); }
   };
   const login = async (event) => {
     event.preventDefault();
     try {
-      auth.set(await api.post("/api/auth/login", { email: email.value, code: code.value }));
+      auth.set(await api.post("/api/auth/login", { ...accountBody(account.value), code: code.value }));
       me = null;
       location.hash = "#/jobs";
     } catch (error) { fill(status, errorBox(error)); }
   };
+  const wechat = async () => {
+    try { location.href = (await api.get("/api/auth/wechat/start")).url; } catch (error) { fill(status, errorBox(error)); }
+  };
   return card(t("login"),
     h("form", { class: "stack narrow", onsubmit: login },
-      field(t("email"), email),
+      field(t("account"), account),
       h("div", { class: "row" }, field(t("code"), code), h("button", { type: "button", onclick: send }, t("sendCode"))),
       h("button", { class: "primary", type: "submit" }, t("signIn")),
+      options.wechat ? h("button", { type: "button", class: "secondary", onclick: wechat }, t("wechatLogin")) : null,
       status));
 }
 
@@ -802,12 +824,14 @@ async function adminUsers() {
   const load = async () => {
     const users = await api.get(`/api/admin/users?email=${encodeURIComponent(search.value)}`);
     fill(table, h("table", { class: "table" }, h("tbody", {}, users.map((u) => h("tr", {},
-      h("td", {}, u.email), h("td", {}, `${t("balance")} ${u.balance} / ${t("available")} ${u.available}`),
+      h("td", {}, u.email || u.phone || (u.wechat ? "微信用户" : u.id.slice(0, 8))), h("td", {}, `${t("balance")} ${u.balance} / ${t("available")} ${u.available}`),
       h("td", {}, h("button", { onclick: async () => {
-        const credits = Number(prompt(`给 ${u.email} 调整多少积分？（负数为扣减）`));
+        const who = u.email || u.phone;
+        if (!who) { alert("这个账号只绑定了微信，暂不能按邮箱或手机号调整"); return; }
+        const credits = Number(prompt(`给 ${who} 调整多少积分？（负数为扣减）`));
         const memo = credits ? prompt("原因（会记入审计）") : "";
         if (!credits || !memo) return;
-        try { await api.post("/api/admin/credits/adjust", { email: u.email, credits, memo }, { "Idempotency-Key": `adj-${u.id}-${Date.now()}` }); load(); }
+        try { await api.post("/api/admin/credits/adjust", { email: who, credits, memo }, { "Idempotency-Key": `adj-${u.id}-${Date.now()}` }); load(); }
         catch (error) { alert(error.message); }
       } }, "调整积分")))))));
   };

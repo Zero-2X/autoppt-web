@@ -10,6 +10,7 @@
 - [ ] Worker 出网白名单：在 Worker 机器上以管理员运行 `scripts/worker_firewall.ps1 -AllowHost <API 与存储主机> -Apply`，并建每小时重跑的计划任务（`-Apply -Quiet`）
 - [ ] 在 Worker 机器上跑 48 小时压测：`python scripts/stress_test.py --minutes 2880 --database-url <PostgreSQL>`（mock Worker）以及真实 Office 卡死恢复
 - [ ] 生产配置：`AUTOPPT_API_SECRET_KEY`、`AUTOPPT_API_STORAGE_KEY`（静态加密）、PostgreSQL、对象存储、SMTP；`alembic upgrade head`
+- [ ] 登录渠道：SMTP（`AUTOPPT_API_SMTP_URL`、`MAIL_SENDER`）；短信中继（`SMS_PROVIDER=webhook`、`SMS_WEBHOOK_URL`、`SMS_WEBHOOK_SECRET`，中继按 `X-AutoPPT-Signature` 验签后调用短信厂商的已审核模板）；微信开放平台网站应用（`WECHAT_APP_ID`、`WECHAT_APP_SECRET`，回调域名填 `PUBLIC_BASE_URL`）
 - [ ] 计划任务：`python -m autoppt_api.maintenance all` 每 5 分钟（通知、过期、对账、告警、账本核对、清理）
 - [ ] 补全 `autoppt_service/templates/redactions.json` 后构建 Worker 模板；处理模板清单里列出的“代码中含案例名”的脚本
 - [ ] 原生重建阶段（P1/P5 未完成的部分）上线前，只开放“规划包”和“图片版”两个档位

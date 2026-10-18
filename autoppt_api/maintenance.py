@@ -17,7 +17,6 @@ import smtplib
 import sys
 from email.message import EmailMessage
 from typing import Any, Sequence
-from urllib.parse import unquote, urlparse
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -46,24 +45,24 @@ def scanner_from_env(command: str) -> Any:
     return scan
 
 
-def send_notifications(session: Session, smtp_url: str, *, sender: str = "AutoPPT <noreply@localhost>", limit: int = 100) -> int:
+def send_notifications(session: Session, smtp_url: str, *, sender: str = "AutoPPT <noreply@localhost>", limit: int = 100,
+                       settings: Settings | None = None) -> int:
+    """Email users who have an address; text the subject to phone-only users (needs ``settings`` for SMS)."""
+    from autoppt_api.messaging import send_sms, smtp_connection
+
     pending = session.scalars(select(Notification).where(Notification.status == "pending").limit(limit)).all()
     if not pending:
         return 0
-    smtp = None
-    if smtp_url:
-        url = urlparse(smtp_url)
-        smtp = (smtplib.SMTP_SSL if url.scheme == "smtps" else smtplib.SMTP)(url.hostname, url.port or 587, timeout=30)
-        if url.scheme == "smtp":
-            smtp.starttls()
-        if url.username:
-            smtp.login(unquote(url.username), unquote(url.password or ""))
+    smtp = smtp_connection(smtp_url) if smtp_url else None
     sent = 0
     try:
         for note in pending:
             user = session.get(User, note.user_id)
-            if smtp is None or user is None:
-                log.info("notification %s to %s: %s", note.id, user.email if user else "?", note.subject)
+            if user is not None and not user.email and user.phone and settings is not None:
+                note.status = send_sms(settings, user.phone, template="notification", params={"subject": note.subject},
+                                       text=f"【AutoPPT】{note.subject}。详情请登录 AutoPPT 查看。")
+            elif smtp is None or user is None or not user.email:
+                log.info("notification %s to %s: %s", note.id, (user.email or user.phone) if user else "?", note.subject)
                 note.status = "logged"
             else:
                 message = EmailMessage()
@@ -94,7 +93,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     result: dict[str, Any] = {}
     with session_scope(factory) as session:
         if args.task in ("notify", "all"):
-            result["notified"] = send_notifications(session, settings.smtp_url)
+            result["notified"] = send_notifications(session, settings.smtp_url, sender=settings.mail_sender, settings=settings)
         if args.task in ("purge", "all"):
             from autoppt_api.lifecycle import purge_intermediate
 

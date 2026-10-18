@@ -110,10 +110,7 @@ def _user_loop(base: str, email: str, stop: threading.Event, stats: Stats, rng: 
         headers = login(client, email)
         sha = upload(client, headers, docx_bytes(rng.randrange(1000)))
         open_jobs: dict[str, float] = {}
-        last_login = time.monotonic()
         while not stop.is_set() or open_jobs:
-            if time.monotonic() - last_login > 600:  # access tokens are short-lived
-                headers, last_login = login(client, email), time.monotonic()
             try:
                 if not stop.is_set() and len(open_jobs) < max_open:
                     tier = rng.choice(TIERS)
@@ -211,7 +208,9 @@ def main(argv: list[str] | None = None) -> int:
     work = args.work_dir or Path(tempfile.mkdtemp(prefix="autoppt-stress-"))
     work.mkdir(parents=True, exist_ok=True)
     settings = Settings(database_url=args.database_url or f"sqlite:///{(work / 'api.db').as_posix()}",
-                        storage_dir=work / "storage", dev_echo_codes=True, admin_emails=("admin@example.com",))
+                        storage_dir=work / "storage", dev_echo_codes=True, admin_emails=("admin@example.com",),
+                        # A soak test is not about login limits: one login per simulated user for the whole run.
+                        access_token_ttl_s=7 * 24 * 3600, login_codes_per_hour=10_000)
     port = free_port()
     server = uvicorn.Server(uvicorn.Config(create_app(settings), host="127.0.0.1", port=port, log_level="warning"))
     threading.Thread(target=server.run, daemon=True).start()
@@ -251,8 +250,6 @@ def main(argv: list[str] | None = None) -> int:
     deadline = started + args.minutes * 60
     while time.monotonic() < deadline:
         time.sleep(min(args.check_every, max(deadline - time.monotonic(), 0.1)))
-        if time.monotonic() - started > 600 * (len(checks) // 20 + 1):
-            admin = login(admin_client, "admin@example.com")
         ledger = admin_client.get("/api/admin/ledger/check", headers=admin).json()
         health = admin_client.get("/api/admin/health", headers=admin).json()
         checks.append({"t_min": round((time.monotonic() - started) / 60, 2), "ledger_ok": ledger["ok"],
@@ -264,7 +261,6 @@ def main(argv: list[str] | None = None) -> int:
         thread.join(timeout=args.drain_minutes * 60)
     undrained = sum(thread.is_alive() for thread in users)
     stop_workers.set()
-    admin = login(admin_client, "admin@example.com")
     final_ledger = admin_client.get("/api/admin/ledger/check", headers=admin).json()
     jobs = admin_client.get("/api/admin/jobs", headers=admin).json()
     durations = sorted(stats.durations)

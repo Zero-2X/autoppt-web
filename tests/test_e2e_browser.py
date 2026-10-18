@@ -93,7 +93,7 @@ def test_order_review_and_download_in_a_real_browser(live):
 
         # Sign in with an email code (the dev server shows the code on the page).
         page.goto(f"{live['base']}/#/login")
-        page.get_by_label("邮箱").fill("student@example.com")
+        page.get_by_label("邮箱或手机号").fill("student@example.com")
         page.get_by_role("button", name="发送验证码").click()
         code = page.get_by_text("开发模式验证码").inner_text().split("：")[-1].strip("）")
         page.get_by_label("验证码").fill(code)

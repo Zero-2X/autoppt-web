@@ -46,7 +46,10 @@ def _created() -> Mapped[datetime]:
 class User(Base):
     __tablename__ = "users"
     id: Mapped[str] = _id()
-    email: Mapped[str] = mapped_column(String(254), unique=True, nullable=False)
+    # One of email / phone / wechat_unionid identifies the account (phone and WeChat logins, 2026-10-18).
+    email: Mapped[str | None] = mapped_column(String(254), unique=True, nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True)
+    wechat_unionid: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
     display_name: Mapped[str] = mapped_column(String(100), default="")
     locale: Mapped[str] = mapped_column(String(10), default="zh-CN")
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)

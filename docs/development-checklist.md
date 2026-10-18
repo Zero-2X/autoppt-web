@@ -378,7 +378,8 @@ draft → estimated → paid(积分冻结) → queued → intake → planning
       `pricing_rules`、`lesson_candidates`、`audit_logs`；另有 `credit_entries`（复式分录）、`auth_codes`、`refresh_tokens`、
       `stored_files`、`upload_sessions`、`idempotency_keys`、`notifications`；初始迁移 `0001`，`alembic check` 无漂移
 - [x] 鉴权：邮箱验证码登录（只存哈希、10 分钟有效、限次尝试），HS256 JWT 加一次性刷新令牌（重放即吊销整组），按邮箱和 IP 限流
-  - [ ] 手机短信验证码、微信登录（按 D4）
+  - [x] 手机号验证码登录（中国大陆手机号，`users.phone`，迁移 0003）与微信网站应用扫码登录（OAuth2，state 绑定发起的浏览器，回调后用两分钟一次性票据换令牌，令牌不进 URL）；登录页一个输入框兼容邮箱和手机号。短信经 `AUTOPPT_API_SMS_PROVIDER=webhook` 发给运营方的签名中继（阿里云/腾讯云短信需要企业签名和模板审核，厂商调用放在中继里）；微信需要开放平台网站应用的 AppID/AppSecret 和回调域名，未配置时按钮不显示
+  - [x] 修复：生产环境下新用户收不到登录验证码（只给已注册用户排队通知，且通知要等 5 分钟一次的维护任务）。验证码现在在请求事务结束后立即发送，且不再明文写入通知表
 - [x] 文件接口：签名 URL 分片上传（按偏移续传）、按内容嗅探类型（不信任扩展名）、大小限制、可插拔病毒扫描（`AUTOPPT_API_SCAN_COMMAND`，如 clamdscan）、按 sha256 去重存储
   - 不提供“秒传”：只凭哈希不能取得文件，必须上传字节；本地存储代替对象存储，接口一致，生产换 MinIO/OSS/COS/S3
 - [x] 任务接口：创建草稿 → 估价 → 提交（确认金额、冻结积分、幂等）→ 查询 → 取消（释放冻结）→ 删除；SSE 推送事件流
@@ -392,7 +393,7 @@ draft → estimated → paid(积分冻结) → queued → intake → planning
   - [ ] Agent SDK 通过 `ANTHROPIC_BASE_URL` 指向网关，真实 key 不下发到 Worker
   - [ ] 记录用量；遇到 429 或 5xx 时退避并切换到其他 key；按 key 控制并发
 - [x] 通知：任务进入检查点、交付、失败、暂停时写入通知队列，`python -m autoppt_api.maintenance notify` 通过 SMTP 发送（未配置时只记日志）
-  - [ ] 短信通知
+  - [x] 短信通知：只绑定手机号的用户，检查点、交付等通知以短信发送标题（正文请登录查看）
 
 **验收**：用 mock Worker 走完整个任务生命周期，包括检查点往返、取消、失败退款；
 接口有 OpenAPI 文档和集成测试。
