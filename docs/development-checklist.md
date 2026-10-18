@@ -357,7 +357,8 @@ draft → estimated → paid(积分冻结) → queued → intake → planning
   - [x] 真实 planning 已接通（`--template`、`--profiles`；Codex 以 `-s workspace-write` 加 restricted-token 沙箱运行，不开 `--search`；沙箱实测见 [安全模型](security-model.md)）；2026-10-17 用真实账号跑通一份样例到 CP1（7.7 分钟，约 69 万输入 / 1.1 万输出 token，校验一次通过），见 [实测记录](p1-real-planning-run.md)；账号限额时任务延后而不是 blocked
   - [x] 真实 reconstruct 已接通（`reconstruct.py`）：代理按 SERVICE_AGENTS.md 第 7 节写 `output/native-deck.pptx`，不碰 Office；Worker 在 Office 锁下审核
         （页数、每条已审核文字必须是原生文字、整页图片不算可编辑、有图表数据时必须是带工作簿的真图表）、用 PowerPoint 渲染、把问题发回或打开 CP3；
-        用假代理测试过，**尚未用真实 Codex + PowerPoint 跑过**（耗时和额度较大，需要先确认）
+        2026-10-17/18 用真实 Codex + PowerPoint 跑通一份 9 页样例：母版 24 轮、原生重建 4 轮约 3,778 万输入 token，
+        途中补上残留文字、原生形状、渲染可见性、坐标轴 id、额度延后、恢复先复查等门禁，见 [实测记录](p1-real-run-masters-reconstruct.md)
   - [ ] 4:3 画幅在 planning 阶段 `blocked`（原仓库提示词构建器只支持 16:9）
 - [ ] 准备 3–5 份脱敏样例（论文答辩、国自然申请、组会报告、纯描述无文档、矢量化），逐份实跑
 - [ ] 记录每份样例的耗时、费用、轮数、失败点，据此定价和设定各阶段预算
