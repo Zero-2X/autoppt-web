@@ -366,7 +366,7 @@ class UsageRecord(Base):
     seconds: Mapped[float] = mapped_column(Float, default=0.0)  # SQLAlchemy 2.1 maps bare float to Double
     business_key: Mapped[str] = mapped_column(String(160), unique=True)
     data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = _created()
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False, index=True)
 
 
 class PricingRule(Base):

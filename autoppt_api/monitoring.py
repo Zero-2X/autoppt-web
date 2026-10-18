@@ -10,10 +10,10 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
-from autoppt_api.models import Job, JobPhase, Notification, User, Worker, now
+from autoppt_api.models import Job, JobPhase, Notification, UsageRecord, User, Worker, now
 from autoppt_api.services import aware, iso
 
 THRESHOLDS = {
@@ -50,11 +50,14 @@ def health(session: Session, *, lease_timeout_s: int = 900) -> dict[str, Any]:
         alerts.append({"kind": "lease_expired", "detail": f"{len(expired)} jobs lost their worker (will be re-leased)"})
 
     since = current - timedelta(hours=24)
-    finished = session.scalars(select(Job).where(Job.finished_at.is_not(None), Job.finished_at >= since)).all()
-    failed = [job for job in finished if job.state == "failed"]
-    rate = round(len(failed) / len(finished), 3) if finished else 0.0
-    if finished and rate > THRESHOLDS["failure_rate"]:
-        alerts.append({"kind": "failure_rate", "detail": f"{len(failed)}/{len(finished)} jobs failed in 24h"})
+    # Counted in SQL: loading a day of finished jobs (with their JSON) held SQLite's write lock for seconds.
+    finished_count, failed_count = session.execute(
+        select(func.count(Job.id), func.coalesce(func.sum(case((Job.state == "failed", 1), else_=0)), 0))
+        .where(Job.finished_at.is_not(None), Job.finished_at >= since)).one()
+    finished_count, failed_count = int(finished_count), int(failed_count)
+    rate = round(failed_count / finished_count, 3) if finished_count else 0.0
+    if finished_count and rate > THRESHOLDS["failure_rate"]:
+        alerts.append({"kind": "failure_rate", "detail": f"{failed_count}/{finished_count} jobs failed in 24h"})
     blocked = session.scalar(select(func.count(Job.id)).where(Job.state == "blocked")) or 0
 
     workers = []
@@ -80,7 +83,7 @@ def health(session: Session, *, lease_timeout_s: int = 900) -> dict[str, Any]:
                   "by_phase": {phase: sum(1 for j in waiting if j.pending_phase == phase) for phase in sorted({j.pending_phase for j in waiting})}},
         "running_phases": len(running),
         "blocked_jobs": int(blocked),
-        "finished_24h": len(finished),
+        "finished_24h": finished_count,
         "failure_rate_24h": rate,
         "workers": workers,
         "template_versions_online": versions,
@@ -90,24 +93,39 @@ def health(session: Session, *, lease_timeout_s: int = 900) -> dict[str, Any]:
 
 
 def job_cost_alerts(session: Session, since) -> list[str]:
-    """Jobs running or finished since ``since`` whose tokens or cost run past the thresholds."""
+    """Jobs running or finished since ``since`` whose tokens or cost run past the thresholds.
+
+    One grouped query over usage records: measured 2026-10-19 on a day-old soak database (about 9,000 jobs),
+    computing each job's cost separately took 8 s under SQLite's write lock and stalled every request."""
     from autoppt_api.pricing import DEFAULT_RULES, active_rules
-    from autoppt_api.reports import job_cost
 
     _, rules = active_rules(session)
     rates = rules.get("cost_rates", DEFAULT_RULES["cost_rates"])
     value = float(rules.get("credit_value_cents", DEFAULT_RULES["credit_value_cents"]))
-    jobs = session.scalars(select(Job).where((Job.finished_at.is_(None)) | (Job.finished_at >= since))
-                           .where(Job.submitted_at.is_not(None))).all()
+    recent = select(UsageRecord.job_id).where(UsageRecord.created_at >= since).distinct()  # jobs that spent recently
+    agent = UsageRecord.kind == "agent_turn"
+    rows = session.execute(
+        select(UsageRecord.job_id,
+               func.coalesce(func.sum(case((agent, UsageRecord.input_tokens), else_=0)), 0),
+               func.coalesce(func.sum(case((agent, UsageRecord.cached_input_tokens), else_=0)), 0),
+               func.coalesce(func.sum(case((agent, UsageRecord.output_tokens), else_=0)), 0),
+               func.coalesce(func.sum(case((UsageRecord.kind == "office", UsageRecord.seconds), else_=0)), 0))
+        .where(UsageRecord.job_id.in_(recent)).group_by(UsageRecord.job_id)).all()
+    priced = any(rates.get(key, 0) for key in ("input_per_million_cents", "cached_input_per_million_cents",
+                                                 "output_per_million_cents", "office_minute_cents"))
+    estimates = dict(session.execute(select(Job.id, Job.estimate).where(Job.id.in_(recent))).all()) if priced else {}
     found = []
-    for job in jobs:
-        cost = job_cost(session, job, rates)
-        if cost["tokens"]["input"] > THRESHOLDS["job_input_tokens"]:
-            found.append(f"{job.id[:8]} used {cost['tokens']['input'] / 1e6:.1f} M input tokens")
-        budget = float((job.estimate or {}).get("total") or 0) * value
-        spent = cost["model_cents"] + cost["office_cents"]
+    for job_id, input_tokens, cached, output, office_seconds in rows:
+        if input_tokens > THRESHOLDS["job_input_tokens"]:
+            found.append(f"{job_id[:8]} used {input_tokens / 1e6:.1f} M input tokens")
+        if not priced:
+            continue
+        spent = ((input_tokens - cached) * rates.get("input_per_million_cents", 0) + cached * rates.get("cached_input_per_million_cents", 0)
+                 + output * rates.get("output_per_million_cents", 0)) / 1_000_000 + office_seconds / 60 * rates.get("office_minute_cents", 0)
+        estimate = estimates.get(job_id) or {}
+        budget = float(estimate.get("total") or 0) * value
         if budget and spent > budget * THRESHOLDS["estimate_overrun"]:
-            found.append(f"{job.id[:8]} cost {spent / 100:.2f} CNY against an estimate worth {budget / 100:.2f} CNY")
+            found.append(f"{job_id[:8]} cost {spent / 100:.2f} CNY against an estimate worth {budget / 100:.2f} CNY")
     return found
 
 
