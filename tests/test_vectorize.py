@@ -242,3 +242,22 @@ def test_ocr_component_splits_are_suggested_not_applied(tmp_path):
     lines = vectorize.run_ocr(job, masters, ocr=ocr)["slides"][0]["lines"]
     assert [(l["text"], l.get("suggestion"), l.get("suspect", False)) for l in lines] == [
         ("城市内氵劳频发", "城市内涝频发", True), ("雷达夕卜推", "雷达外推", True), ("研究背景", None, False)]
+
+
+def test_changed_user_supplied_master_blocks_the_rebuild(tmp_path):
+    from autoppt_service.vectorize import verify_user_supplied_masters
+
+    deck = make_pptx(tmp_path / "old.pptx", 2)
+    job = tmp_path / "job"
+    run_phase(job, "intake", job_id="V9", request=vector_request(count=2), uploads={"f_01": str(deck)}, mock=True)
+    checkpoint = pending_checkpoint(job)
+    submit_response(job, {"checkpoint_id": checkpoint["checkpoint_id"], "decision": "approve", "responder": "user",
+                          "user_reply": "文字没问题"})
+    assert verify_user_supplied_masters(job) == []
+    Image.new("RGB", (1920, 1080), "red").save(job / "assets/slides/S02.png")  # swapped after freezing
+    Image.new("RGB", (1920, 1080)).save(job / "assets/slides/S03.png")         # a page nobody uploaded
+    issues = verify_user_supplied_masters(job)
+    assert any("S02: master changed after it was frozen" in i for i in issues)
+    assert any("S03.png" in i for i in issues)
+    result = run_phase(job, "reconstruct", job_id="V9", mock=True)
+    assert result["job_state"] == "blocked" and "user-supplied masters failed their gate" in load_job_state(job)["blocked_reason"]
