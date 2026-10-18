@@ -89,6 +89,58 @@ def stale_lines(lines: Sequence[str], picture_text: str) -> list[str]:
     return stale
 
 
+MIN_VISIBLE_SHARE = 0.4  # OCR misreads some characters; most of a line must still be readable
+
+
+def invisible_lines(lines: Sequence[str], render_text: str, *, min_letters: int = 4) -> list[str]:
+    """Lines that cannot be read in the PowerPoint render (covered, off-slide, blended, cut off)."""
+    seen = _letters(render_text)
+    missing = []
+    for line in lines:
+        target = _letters(line)
+        if len(target) < min_letters:
+            continue
+        window = 3 if len(target) < 8 else 4
+        windows = range(0, len(target) - window + 1)
+        hits = sum(1 for i in windows if target[i:i + window] in seen)
+        if hits / max(len(windows), 1) < MIN_VISIBLE_SHARE:
+            missing.append(line)
+    return missing
+
+
+def render_visibility_errors(
+    renders: dict[str, Path], targets: dict[str, list[str]], *, ocr: Callable[[Path, Path], dict[str, Any]], work_dir: Path,
+    masters: dict[str, Path] | None = None,
+) -> list[str]:
+    """Measured on the first real deck: titles and values present in the PPTX but invisible in PowerPoint.
+
+    Checks the reviewed text, and every line OCR reads clearly on the approved master (titles the
+    master shows must survive even when the plan worded them differently).
+    """
+    from autoppt_service.vectorize import join_cjk
+
+    def read(image: Path, name: str) -> list[str]:
+        result = ocr(Path(image), work_dir / name)
+        return [join_cjk(line.get("text", "")) for line in result.get("lines", [])]
+
+    errors = []
+    work_dir.mkdir(parents=True, exist_ok=True)
+    for slide_id, image in sorted(renders.items()):
+        text = " ".join(read(image, f"{slide_id}-render.json"))
+        missing = invisible_lines(targets.get(slide_id, []), text)
+        if missing:
+            errors.append(f"{slide_id}: reviewed text is in the deck but not visible in the PowerPoint render "
+                          "(covered by a picture or shape, off the slide, or the same colour as the background): "
+                          + " | ".join(m[:30] for m in missing[:6]))
+        if masters and slide_id in masters:
+            master_lines = [line for line in read(masters[slide_id], f"{slide_id}-master.json") if len(_letters(line)) >= 6]
+            lost = [line for line in invisible_lines(master_lines, text, min_letters=6) if line not in missing]
+            if lost:
+                errors.append(f"{slide_id}: text the approved master shows is missing from the native render: "
+                              + " | ".join(m[:30] for m in lost[:6]))
+    return errors
+
+
 def audit_pptx(
     pptx_path: Path, targets: dict[str, list[str]], *, slide_ids: Sequence[str], require_chart: bool,
     ocr: Callable[[Path, Path], dict[str, Any]] | None = None, work_dir: Path | None = None,
@@ -313,6 +365,16 @@ def run_reconstruct_agent(
             issues = [f"PowerPoint rendered {len(renders)} slides, expected {len(slide_ids)}"]
             outcome["errors"] = issues
             continue
+        if ocr is not None:
+            masters = {sid: job_dir / MASTERS_DIR / f"{sid}.png" for sid in slide_ids}
+            hidden = render_visibility_errors(renders, targets, ocr=ocr, masters=masters,
+                                              work_dir=job_dir / "workspace" / "reconstruct" / "render-ocr")
+            if hidden:
+                # The agent cannot run PowerPoint; point it at the Worker's renders so it can see the problem.
+                issues = hidden + [f"The Worker's PowerPoint renders of your deck are in {RENDER_DIR}/Sxx.png; open each "
+                                   "failing slide's render next to assets/slides/Sxx.png and fix what differs."]
+                outcome["errors"] = hidden
+                continue
         agent_report = read_json(job_dir / REPORT) or {}
         report = {
             "schema_version": "autoppt-reconstruct-report-v1",

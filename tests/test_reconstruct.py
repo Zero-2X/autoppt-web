@@ -108,6 +108,15 @@ def job_at_reconstruct(tmp_path, monkeypatch):
     import autoppt_service.vectorize as vectorize
 
     monkeypatch.setattr(vectorize, "powerpoint_renderer", fake_renderer)
+    plan_path = job / "workspace/presentation_handoff/deck-plan.json"
+
+    def fake_ocr(image, out_json):  # renders show the planned text; masters show nothing OCR can read
+        if "office-render" not in str(image):
+            return {"lines": []}
+        lines = [line for s in json.loads(plan_path.read_text(encoding="utf-8"))["slides"] for line in s["exact_text"]]
+        return {"lines": [{"text": line} for line in lines]}
+
+    monkeypatch.setattr(vectorize, "windows_ocr", fake_ocr)
 
     def reconstruct(mode: str = "ok"):
         monkeypatch.setenv("FAKE_BUILD_MODE", mode)
@@ -236,3 +245,24 @@ def test_withdrawn_preview_sends_audit_errors_not_user_words(job_at_reconstruct)
     assert result["job_state"] == "cp3_native_preview" and pending_checkpoint(job)["round"] == 2
     prompt = sorted(job_at_reconstruct["home"].glob("prompt-*.txt"))[-1].read_text(encoding="utf-8")
     assert "still shows the old text" in prompt and "<<<USER_REPLY" not in prompt
+
+
+def test_render_visibility_finds_covered_and_lost_text(tmp_path):
+    from autoppt_service.reconstruct import invisible_lines, render_visibility_errors
+
+    assert invisible_lines(["去掉管网约束后误报率上升到 0.26"], "去掉管网约束后") == ["去掉管网约束后误报率上升到 0.26"]
+    assert invisible_lines(["去掉管网约束后误报率上升到 0.26"], "去掉管网约束后误报率上升到0.26") == []
+    renders = {"S07": tmp_path / "render.png"}
+    masters = {"S07": tmp_path / "master.png"}
+    for path in (*renders.values(), *masters.values()):
+        Image.new("RGB", (10, 10)).save(path)
+
+    def ocr(image, out_json):
+        if Path(image).name == "master.png":
+            return {"lines": [{"text": "对比与消融结果：本文方法精度更高"}, {"text": "去掉管网约束后误报率上升到 0.26"}]}
+        return {"lines": [{"text": "方法 命中率 误报率"}, {"text": "去掉管网约束后"}]}
+
+    errors = render_visibility_errors(renders, {"S07": ["去掉管网约束后误报率上升到 0.26"]}, ocr=ocr, masters=masters,
+                                      work_dir=tmp_path / "w")
+    assert "not visible in the PowerPoint render" in errors[0]
+    assert "missing from the native render" in errors[1] and "对比与消融结果" in errors[1]
