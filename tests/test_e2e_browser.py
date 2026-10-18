@@ -86,7 +86,7 @@ def test_order_review_and_download_in_a_real_browser(live):
             browser = p.chromium.launch()
         except Exception as exc:  # noqa: BLE001 - browser binaries missing
             pytest.skip(f"chromium not available: {exc}")
-        page = browser.new_page(accept_downloads=True)
+        page = browser.new_page(accept_downloads=True, locale="zh-CN")  # the UI follows navigator.language; CI runs en-US
         dialogs: list[str] = []
         page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.accept()))
         page.set_default_timeout(60_000)
