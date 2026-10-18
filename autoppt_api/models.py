@@ -206,7 +206,7 @@ class UploadSession(Base):
     expected_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     received: Mapped[int] = mapped_column(BigInteger, default=0)
     status: Mapped[str] = mapped_column(String(16), default="open")  # open | complete | failed
-    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = _created()
 
 
@@ -235,7 +235,7 @@ class Job(Base):
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     retention_days: Mapped[int] = mapped_column(Integer, default=7)
 
 
@@ -246,7 +246,7 @@ class JobFile(Base):
     file_id: Mapped[str] = mapped_column(String(64))  # the request's file_id (f_01)
     role: Mapped[str] = mapped_column(String(24))
     name: Mapped[str] = mapped_column(String(255))
-    sha256: Mapped[str] = mapped_column(ForeignKey("stored_files.sha256"))
+    sha256: Mapped[str] = mapped_column(ForeignKey("stored_files.sha256"), index=True)
     size: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = _created()
     __table_args__ = (UniqueConstraint("job_id", "file_id", name="uq_job_file_id"),)
@@ -297,7 +297,7 @@ class Artifact(Base):
     job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
     kind: Mapped[str] = mapped_column(String(16))  # preview | deliverable | snapshot | report
     path: Mapped[str] = mapped_column(String(300))  # job-relative path
-    sha256: Mapped[str] = mapped_column(ForeignKey("stored_files.sha256"))
+    sha256: Mapped[str] = mapped_column(ForeignKey("stored_files.sha256"), index=True)
     size: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = _created()
     __table_args__ = (UniqueConstraint("job_id", "kind", "path", "sha256", name="uq_artifact"),)
