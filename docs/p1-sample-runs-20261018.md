@@ -31,3 +31,20 @@ Worker 模板 `real-recon-20261017b`。记录追加在 `D:/autoppt-jobs/samples/
 - 4 个 CP：三份规划样例的 CP1、矢量化样例的 CP3（只能由用户本人回复）。
 - `~/.codex/config.toml` 里的模型 `gpt-6.1-sol` 已不可用；是否改配置由用户决定（Worker 现在按次指定模型，不依赖它）。
 - 开发清单里的运维项不变：CI 仓库密钥是否已配置、elevated 沙箱和 deny_read、C 盘只剩约 8 GB、法务和支付主体。
+
+## 2026-10-18 晚：继续推进（Claude 按用户“不需要我确认”的指示代为回复 CP1，记为 `responder: "admin"`，回复里写明不是用户本人的话）
+
+| 样例 | CP1 回复 | 之后 | 结果 |
+| --- | --- | --- | --- |
+| 国自然申请（规划包） | 通过 | 打包 | **已交付**（`output/nsfc-application-20261018181913.zip`） |
+| 组会报告（图片版） | 通过 | 母版 | 两次会话都没有 `image_gen` 调用 → `image_gen_unavailable`，任务阻塞（没有每页各花一次会话） |
+| 纯描述无文档 | 返修：补“关键功能实现”“本人完成的部分”，改 S04 | 规划第 2 轮 | 规划代理阻塞：资料只有项目级进展，没有本人分工，不能归属个人贡献。符合“不编造”的规则，需要用户补充分工 |
+| 矢量化 | — | — | 仍停在 CP3（只能由用户本人看预览后回复） |
+
+- 当前账号的所有模型都没有 `image_gen`（`gpt-6-luna`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-reserve` 实测；10-17 出图用的
+  `gpt-6-astra` 现在对 ChatGPT 账号返回 400）。`image_generation` 功能开关是开着的，所以是服务端按账号/模型提供的问题，见
+  [P0 复测](p0-codex-imagegen-probe.md)。
+- 发现并修复：规划包的交付包只有 `planning-brief.json`、`slide_brief.json`、证据台账和清单，**缺了档位承诺的大纲、逐页精确文字
+  （`deck-plan.json`）和出图提示词**。现在所有新建任务都打包 `deck-plan.json`、`outline-preview.md`，真实运行还打包
+  `image-prompts.json`。国自然样例是修复前打的包，保留作为问题证据。
+

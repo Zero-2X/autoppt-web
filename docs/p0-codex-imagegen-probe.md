@@ -96,4 +96,8 @@ python -m autoppt_service.codex_imagegen_step <job>/image-prompts.json --profile
 - 改进（`codex_imagegen_step`）：连续两次会话都没有任何 `image_gen` 调用、且本轮还没出过图时，停止整轮，
   报 `image_gen_unavailable`（带模型名），不再每页都花一次会话。
 - 模型网关（API key 模式）已能让真实 `codex` CLI 走通（见开发清单 P2），但 API key 下 `image_gen` 是否可用仍未实测。
+- 补测（同日晚）：`gpt-5.6-luna`、`gpt-reserve` 同样没有 `image_gen`；10-17 的 27 次成功出图全部来自 `gpt-6-astra`
+  （rollout 记录），它现在对 ChatGPT 账号返回 HTTP 400 “not supported when using Codex with a ChatGPT account”。
+  CLI 的 `image_generation` 功能开关为开启。结论：账号目前拿不到带 `image_gen` 的模型；项目规则不允许改用图片 API，
+  所以只能等账号恢复或换账号。
 

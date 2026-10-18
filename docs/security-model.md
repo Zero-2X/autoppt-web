@@ -16,7 +16,18 @@
 
 1. **本机默认配置下沙箱没有生效。** 2026-10-17 的真实规划运行（[p1-real-planning-run.md](p1-real-planning-run.md)）就是在这种状态下跑的；当时文档里“只能写任务目录、不能联网”的说法不成立，现已更正。
 2. 现在所有服务调用都强制 `-c windows.sandbox="unelevated"`（`codex_exec.windows_sandbox_mode()`，可用 `AUTOPPT_CODEX_WINDOWS_SANDBOX` 覆盖）。实测可拦截联网和目录外写入。
-3. **读取不受限制。** Codex 的 `permissions.filesystem.deny_read` 只在 elevated 沙箱下生效（“unelevated restricted-token sandbox cannot enforce deny-read restrictions”）。elevated 沙箱需要管理员一次性安装，本机未安装，未实测。
+3. **读取不受限制（2026-10-18 复测，结论不变，补充了能否修的实测）。** 用真实 `codex exec -s workspace-write` 会话
+   （`windows.sandbox="unelevated"`）读三处金丝雀文件：用户目录、`~/.codex`（与 `auth.json` 同目录）、另一个任务目录，
+   **全部读得到**。试过的修法都不成立：
+   - 本机已不是管理员会话；这个版本的 Codex 0.163.0 不再提供 elevated 沙箱安装命令（`elevated_windows_sandbox` 标为 removed，
+     `codex sandbox` 只剩 `uninstall`）；二进制里写明 “deny-read overrides require the elevated Windows sandbox backend”。
+   - 新的 MXC 后端（`windows.sandbox="mxc"`）在本机报 “native MXC is unavailable on this executor”。
+   - 给 Codex 沙箱能力 SID（`~/.codex/cap_sid` 里的通用 workspace/readonly SID，以及该任务目录专属的 SID）加“拒绝读取”ACE：
+     代理照样读得到（受限令牌的访问检查不靠这些 SID）。
+   - 可行的替代：**模型网关模式**（开发清单 P2，已实现）下 Worker 不再有 ChatGPT 登录凭证，任务令牌只在该阶段的环境变量里且
+     Codex 不传给代理命令；加上专用 Worker 账号（读不到其他用户的文件）、一机一任务、阶段后删除本机副本，凭证与其他客户数据就不在
+     代理可读的范围内。内测期仍用账号池时，这一项是已知残留风险。
+3a. 原记录： Codex 的 `permissions.filesystem.deny_read` 只在 elevated 沙箱下生效（“unelevated restricted-token sandbox cannot enforce deny-read restrictions”）。elevated 沙箱需要管理员一次性安装，本机未安装，未实测。
 
 ## 2. 由此采取的措施
 

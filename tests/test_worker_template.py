@@ -119,3 +119,15 @@ def test_render_service_agents(tmp_path, template):
     (tmp_path / "job").mkdir()
     path = write_job_agents(tmp_path / "job", template, job_id="J42")
     assert path.read_text(encoding="utf-8").startswith("# AutoPPT service-mode instructions")
+
+
+def test_skill_copy_carries_the_user_supplied_master_addendum(template, tmp_path):
+    skill = (template / "autopptskills" / "SKILL.md").read_text(encoding="utf-8")
+    assert skill.startswith("# skill")  # the source text comes first, unchanged apart from redaction
+    assert "Service addendum (autoppt-web" in skill and "user_supplied_master" in skill
+    assert "must not be run, imitated or satisfied with a" in skill
+    assert (tmp_path / "autoppt" / "autopptskills" / "SKILL.md").read_text(encoding="utf-8").count("Service addendum") == 0
+    from autoppt_service.worker_template import load_template_manifest, verify_template
+
+    assert any("SKILL_SERVICE_ADDENDUM" in item for item in load_template_manifest(template)["service_addenda"])
+    assert verify_template(template)["matching"]  # the addendum is part of the hashed inventory

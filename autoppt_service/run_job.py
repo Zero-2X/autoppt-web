@@ -615,6 +615,9 @@ def phase_reconstruct(
     renderer: Any = None,
 ) -> dict[str, Any]:
     state = _enter(job_dir, "reconstruct")
+    blocked = _user_master_gate(job_dir, state, "reconstruct")
+    if blocked:
+        return blocked
     if not mock:
         return _real_reconstruct(job_dir, state, job_id=job_id, template=template, profiles_path=profiles_path,
                                  command=command, reasoning_effort=reasoning_effort, renderer=renderer)
@@ -672,8 +675,26 @@ def _build_image_deck_with_repo(job_dir: Path, output: Path) -> None:
         raise PhaseError(f"build_image_deck.py failed: {completed.stderr.strip()[-1000:]}")
 
 
+def _user_master_gate(job_dir: Path, state: dict[str, Any], phase: str) -> dict[str, Any] | None:
+    """Vectorization only: the user-supplied masters must still be the pages the user uploaded (D3)."""
+    request = read_json(service_path(job_dir, "job-request.json")) or {}
+    if request.get("service") != "vectorize":
+        return None
+    from autoppt_service.vectorize import verify_user_supplied_masters
+
+    issues = verify_user_supplied_masters(job_dir)
+    if not issues:
+        return None
+    state = transition(state, "blocked", reason=("user-supplied masters failed their gate: " + "; ".join(issues))[:1000])
+    save_job_state(job_dir, state)
+    return {"phase": phase, "job_state": state["state"], "issues": issues}
+
+
 def phase_package(job_dir: Path, *, job_id: str, mock: bool) -> dict[str, Any]:
     state = _enter(job_dir, "package")
+    blocked = _user_master_gate(job_dir, state, "package")
+    if blocked:
+        return blocked
     request = read_json(service_path(job_dir, "job-request.json"))
     tier = request["delivery"]["tier"]
     if request["service"] == "vectorize":
@@ -681,10 +702,15 @@ def phase_package(job_dir: Path, *, job_id: str, mock: bool) -> dict[str, Any]:
         files: list[Path] = [job_dir / "workspace" / "vectorize" / "reviewed-text.json",
                              job_dir / MASTERS_DIR / "user-supplied-masters.json"]
     else:
+        # The planning package promises the outline, every slide's exact text and evidence, and an image prompt
+        # per slide; before 2026-10-18 the bundle carried only the briefs and the ledger.
         files = [
             job_dir / HANDOFF_DIR / "planning-brief.json",
             job_dir / HANDOFF_DIR / "slide_brief.json",
+            job_dir / HANDOFF_DIR / "deck-plan.json",
+            job_dir / HANDOFF_DIR / "outline-preview.md",
             job_dir / EVIDENCE_DIR / "evidence-ledger.json",
+            *([] if mock else [job_dir / "image-prompts.json"]),
         ]
     acceptance = None
     with phase_timer(job_dir, "package", mock=mock):

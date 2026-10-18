@@ -39,6 +39,8 @@ TEMPLATE_SCHEMA = "autoppt-worker-template-v1"
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 SERVICE_AGENTS = TEMPLATES_DIR / "SERVICE_AGENTS.md"
 REDACTIONS = TEMPLATES_DIR / "redactions.json"
+# Appended to the template's copy of SKILL.md; the source repository stays unchanged (D3: user_supplied_master).
+SKILL_ADDENDUM = TEMPLATES_DIR / "SKILL_SERVICE_ADDENDUM.md"
 
 WHOLE_DIRS = ("autopptskills", "autoppt_workflow", "scripts")
 IMPROVEMENT_FILES = ("ppt-improvement-ledger.jsonl", "style-handbook.md")
@@ -200,6 +202,10 @@ def build_template(
             report["redactions"] += hits
             target.write_text(text, encoding="utf-8")
         shutil.copy2(SERVICE_AGENTS, staging / "SERVICE_AGENTS.md")
+        skill = staging / "autopptskills" / "SKILL.md"
+        if skill.is_file():
+            text = skill.read_text(encoding="utf-8").rstrip("\n")
+            skill.write_text(text + "\n" + SKILL_ADDENDUM.read_text(encoding="utf-8"), encoding="utf-8")
         files = inventory(staging)
         excluded = sorted(
             entry.name for entry in repo.iterdir()
@@ -214,6 +220,7 @@ def build_template(
             "source_commit": identity["commit"],
             "source_dirty": identity["dirty"],
             "included": [*WHOLE_DIRS, "improvement (lessons only)", *include_docs, "SERVICE_AGENTS.md"],
+            "service_addenda": ["autopptskills/SKILL.md += templates/SKILL_SERVICE_ADDENDUM.md (user_supplied_master, D3)"],
             "excluded_present_in_repo": excluded,
             "redaction": {
                 "terms": len(redactions["terms"]),

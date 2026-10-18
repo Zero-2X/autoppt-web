@@ -250,6 +250,39 @@ def prepare_masters(
     return payload
 
 
+def verify_user_supplied_masters(job_dir: Path) -> list[str]:
+    """The gate for ``user_supplied_master`` (D3), in place of the workflow's ImageGen-first gate.
+
+    Every frozen master must be listed in ``user-supplied-masters.json`` with that provenance, still have its
+    recorded hash, and come from an upload whose hash matches the source manifest; no unlisted page may
+    appear.  Run before the rebuild and before packaging."""
+    job_dir = Path(job_dir)
+    record = read_json(job_dir / MASTERS_DIR / "user-supplied-masters.json")
+    if not record:
+        return ["user-supplied-masters.json is missing"]
+    issues = []
+    if record.get("provenance") != PROVENANCE:
+        issues.append(f"master record provenance is {record.get('provenance')!r}, not {PROVENANCE}")
+    uploads = {f["file_id"]: f.get("sha256") for f in (read_json(job_dir / EVIDENCE_DIR / "source-manifest.json") or {}).get("files", [])}
+    listed = set()
+    for slide in record.get("slides", []):
+        path = job_dir / slide["path"]
+        listed.add(path.name)
+        if slide.get("provenance") != PROVENANCE:
+            issues.append(f"{slide['slide_id']}: provenance {slide.get('provenance')!r}")
+        if not path.is_file():
+            issues.append(f"{slide['slide_id']}: master {slide['path']} is missing")
+        elif sha256_file(path) != slide["sha256"]:
+            issues.append(f"{slide['slide_id']}: master changed after it was frozen (sha256 differs)")
+        source = slide.get("source", {})
+        if uploads.get(source.get("file_id")) != source.get("source_sha256"):
+            issues.append(f"{slide['slide_id']}: source upload {source.get('file_id')} does not match the source manifest")
+    extra = sorted(p.name for p in (job_dir / MASTERS_DIR).glob("S*.png") if p.name not in listed)
+    if extra:
+        issues.append(f"masters not in the user-supplied record: {', '.join(extra)}")
+    return issues
+
+
 # ---------------------------------------------------------------- OCR and CP-V
 
 

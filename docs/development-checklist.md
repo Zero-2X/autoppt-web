@@ -363,6 +363,10 @@ draft → estimated → paid(积分冻结) → queued → intake → planning
         途中补上残留文字、原生形状、渲染可见性、坐标轴 id、额度延后、恢复先复查等门禁，见 [实测记录](p1-real-run-masters-reconstruct.md)
   - [x] 4:3 画幅：原仓库提示词构建器只写 16:9，服务侧把每页提示改写为 4:3 画布（1440x1080，保留工作流门禁要求的整页约定）；图片版由服务按 10 x 7.5 in 打包（原仓库 `build_image_deck.py` 只做 16:9）；母版比例偏差超过 3% 在 CP2 报出。ImageGen 是否按 4:3 出图尚未实测
 - [ ] 准备 3–5 份脱敏样例（论文答辩、国自然申请、组会报告、纯描述无文档、矢量化），逐份实跑
+  - 2026-10-18 进展（见 [样例实测](p1-sample-runs-20261018.md)）：论文答辩样例全流程交付；国自然样例（规划包）CP1 后打包交付；
+    组会样例进母版后按新逻辑两次会话即停（`image_gen_unavailable`）；纯描述样例 CP1 返修要求补“本人完成的部分”，规划代理因资料没有
+    个人分工而阻塞（不编造，等用户补充）；矢量化样例停在 CP3 等用户本人。修复：规划包原来只打包简报和证据台账，漏了大纲、逐页精确文字
+    和出图提示词
 - [ ] 记录每份样例的耗时、费用、轮数、失败点，据此定价和设定各阶段预算
 - [x] 给新模块补 pytest 用例；`--mock` 路径跑通全流程（供后端联调）：`python -m autoppt_service.run_job req.json --job-dir <dir> --job-id J1 --uploads uploads.json --phase all --mock --auto-respond`
 
@@ -466,11 +470,11 @@ CP3 管理员不能代批）、取消、系统失败退款、可重试失败退�
 
 ### P5 矢量化服务
 
-- [ ] 按 D3 实现 `user_supplied_master` 来源类型（上传哈希、上传记录、层级命名），
+- [x] 按 D3 实现 `user_supplied_master` 来源类型（上传哈希、上传记录、层级命名），
       并同步更新 `SKILL.md`、门禁脚本和测试
   - [x] 服务侧实现（`autoppt_service/vectorize.py`）：用户页面冻结为母版，`assets/slides/user-supplied-masters.json` 记录来源文件、
         页码、上传哈希和母版哈希，标注“不是 ImageGen 产物”；验收记录使用单独的层级名 `user-supplied-master-native-approved`
-  - [ ] `SKILL.md` 和门禁脚本：原仓库不能修改（用户要求），D3 也未拍板；在此之前工作流的 ImageGen-first 门禁不认这类母版
+  - [x] `SKILL.md` 和门禁：原仓库不改；服务构建 Worker 模板时在模板副本的 `SKILL.md` 末尾追加服务附录（`templates/SKILL_SERVICE_ADDENDUM.md`：这类母版不跑也不伪造 ImageGen-first 报告、不重绘、按 CP-V 审核文字重建、层级名），模板清单记录 `service_addenda`；门禁由服务自己的 `verify_user_supplied_masters` 承担（母版哈希、上传哈希、不得混入未登记的页），重建和打包前都跑，不通过即阻塞
 - [x] 输入归一化：PPTX 用 PowerPoint 渲染（调用原仓库 `render_pptx_powerpoint.ps1`，只读使用，同一时间只跑一个 Office 任务），
       PDF 栅格化（pypdfium2，已列入依赖；没有时才用 PyMuPDF，**PyMuPDF 是 AGPL 许可，商用前需评估**），图片统一为 RGB PNG，宽度 1920
   - 2026-10-17 本机实测：2 页中文 PPTX，PowerPoint 渲染 7.1 秒（1920×1080），Windows OCR 1.7 秒，文字全部识别正确
@@ -513,7 +517,7 @@ CP3 管理员不能代批）、取消、系统失败退款、可重试失败退�
 - [ ] **防提示注入**：上传的文档可能夹带针对代理的指令。具体措施：
   - [x] 关闭代理的联网和网页搜索能力：不开 `--search`；实测发现本机默认配置下沙箱未生效，现强制 `windows.sandbox="unelevated"`，实测可拦截联网和任务目录外写入
   - [x] Worker 出网白名单脚本 `scripts/worker_firewall.ps1`：解析允许的主机（服务 API/存储、Codex 端点、Office 激活与证书吊销），默认只打印计划；`-Apply`（管理员）把出站默认改为阻止并只放行这些地址，`-Remove` 还原；CDN 地址会变，需每小时用计划任务重跑。未在本机应用（会断开本机网络），部署时在 Worker 机器上执行
-  - [ ] 拒绝访问任务目录以外的路径：写入已拦截；**读取未拦截**（`deny_read` 需要 elevated 沙箱安装）。补偿措施：泄露拦截（扫描所有代理输出中的本机凭证和凭证形态，命中即失败且不上传）、本机只保留当前任务数据、阶段结束删除 rollout
+  - [ ] 拒绝访问任务目录以外的路径：写入已拦截；**读取未拦截**（2026-10-18 复测：本机无管理员、该版 Codex 已无 elevated 安装命令、MXC 后端不可用、对沙箱 SID 加拒绝 ACE 无效，见[安全模型](security-model.md)第 1 节；替代方案是网关模式 + 专用 Worker 账号）（`deny_read` 需要 elevated 沙箱安装）。补偿措施：泄露拦截（扫描所有代理输出中的本机凭证和凭证形态，命中即失败且不上传）、本机只保留当前任务数据、阶段结束删除 rollout
   - [ ] 机器上不放长期凭证，只有每任务的临时令牌：模型网关已实现（Worker 只拿到绑定租约、有预算的任务令牌），但内测期仍用 ChatGPT 账号登录，刷新令牌存在 Worker 上；D2 切到 API key 后即可去掉
 - [x] 多租户隔离：不同用户的任务不共享目录、会话或参考图（每阶段新会话；上报后删除本机副本；模板默认不含 v66 等案例素材，见 D7）
 - [x] 经验闭环改造：任务内经验只生成“经验候选”，自动去除姓名、题目、数据等内容；

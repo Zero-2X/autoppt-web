@@ -169,7 +169,11 @@ def test_mock_flow_native_tier_end_to_end(tmp_path, uploads):
     manifest = read_json(job / "output/delivery-manifest.json")
     assert manifest["mock"] is True and "MOCK" in manifest["notice"]
     with zipfile.ZipFile(job / "output/J1-MOCK.zip") as bundle:
-        assert "output/native-deck.pptx" in bundle.namelist()
+        names = bundle.namelist()
+        assert "output/native-deck.pptx" in names
+        # what the planning package promises travels with every new deck: outline, exact text, evidence
+        assert {"workspace/presentation_handoff/deck-plan.json", "workspace/presentation_handoff/outline-preview.md",
+                "workspace/evidence_workspace/evidence-ledger.json"} <= set(names)
     usage = read_json(service_path(job, "usage-summary.json"))
     assert set(usage["phases"]) == {"intake", "planning", "masters", "reconstruct", "package"}
     assert len(list((service_path(job, "checkpoints")).iterdir())) == 3
