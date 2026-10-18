@@ -1,6 +1,6 @@
 # AutoPPT 网页服务化：仓库分析与开发清单
 
-> 编写日期：2026-10-16 · 基于提交 `482e7c7` 及当前工作区 · 状态：规划草案；P0 出图实测已完成，P1 进行中
+> 编写日期：2026-10-16 · 基于提交 `482e7c7` 及当前工作区 · 状态：2026-10-18 除支付（用户要求暂缓）和需要外部条件的项目外，代码侧已完成；未完成项见各节 `[ ]`
 >
 > **2026-10-16 决定：全部由 Codex 执行**（规划、出图、重建、验收都通过 `codex exec`，出图用 Codex
 > 内置 `image_gen`，内测期使用本机 Codex 账号池）。Claude Agent SDK 路线暂停，下文中与 Claude 相关的
@@ -354,7 +354,7 @@ draft → estimated → paid(积分冻结) → queued → intake → planning
   - [x] 版本不可覆盖，`template-manifest.json` 记录源提交、是否有未提交改动、逐文件 sha256；运行前校验模板未被改动
   - [x] 脱敏：台账只保留经验字段，文本文件按 `templates/redactions.json` 替换案例名和本地/运行产物路径；代码不改写，只在清单中列出含案例名的文件（当前 8 个脚本含“智仓兴教”，需要管理员决定）
   - [x] `docs/` 默认不导出，需要时用 `--include-doc` 指定；skill 安装带暂存和备份，并可逐账号核对版本
-- [ ] 本地命令 `python -m autoppt_service.run_job <job-request.json> --phase planning|masters|reconstruct|package`，在一台 Windows 机器上用 `codex exec` 依次跑完各阶段（masters 阶段直接调用已完成的出图步骤），检查点之间人工写入回复
+- [x] 本地命令 `python -m autoppt_service.run_job <job-request.json> --phase planning|masters|reconstruct|package`，在一台 Windows 机器上用 `codex exec` 依次跑完各阶段（masters 阶段直接调用已完成的出图步骤），检查点之间人工写入回复
   - [x] 命令、阶段驱动、`--respond` 写入回复、`--mock` 全流程已完成；真实路线已接通 intake、masters（读任务根目录的 `image-prompts.json`）和图片版打包（调用原仓库 `build_image_deck.py`）
   - [x] 真实 planning 已接通（`--template`、`--profiles`；Codex 以 `-s workspace-write` 加 restricted-token 沙箱运行，不开 `--search`；沙箱实测见 [安全模型](security-model.md)）；2026-10-17 用真实账号跑通一份样例到 CP1（7.7 分钟，约 69 万输入 / 1.1 万输出 token，校验一次通过），见 [实测记录](p1-real-planning-run.md)；账号限额时任务延后而不是 blocked
   - [x] 真实 reconstruct 已接通（`reconstruct.py`）：代理按 SERVICE_AGENTS.md 第 7 节写 `output/native-deck.pptx`，不碰 Office；Worker 在 Office 锁下审核
@@ -503,7 +503,7 @@ CP3 管理员不能代批）、取消、系统失败退款、可重试失败退�
 - [x] 灰度与版本：Worker 模板固定版本号，任务记录所用版本；已开始的任务只交给同版本的 Worker
 
 **验收**：连续 48 小时压力测试中，Office 卡死能自动恢复，没有任务丢失或重复扣费。
-**2026-10-18 状态**：新增 `scripts/stress_test.py`（真实 API + 多个 mock Worker + 并发用户下单、审核、重做、取消，定时核对账本和卡住的阶段）和 20 秒的回归用例 `tests/test_stress_smoke.py`。第一次跑就发现并修好一个真实缺陷：异步接口（分片上传、Worker 上传产物、支付回调）在事件循环里等待 SQLite 写锁，整台服务卡住 30 秒后报“database is locked”/HTTP 500；Worker 上传产物还在接收整个快照期间持有写锁；会话提交也改到独立线程，不再与等锁的请求抢线程池。修复后 1 分钟 6 用户 3 Worker：交付 42 单、账本每次核对都平衡、最长持锁 1.05 s。48 小时连续压测（含真实 Office 卡死恢复）仍需在 Worker 机器上跑。2026-10-17 已有的自动化用例：已有自动化用例（`tests/test_ops.py`）：Worker 在阶段中途崩溃后租约过期，另一台空机器从快照恢复
+**2026-10-18 状态**：新增 `scripts/stress_test.py`（真实 API + 多个 mock Worker + 并发用户下单、审核、重做、取消，定时核对账本和卡住的阶段）和 20 秒的回归用例 `tests/test_stress_smoke.py`。第一次跑就发现并修好一个真实缺陷：异步接口（分片上传、Worker 上传产物、支付回调）在事件循环里等待 SQLite 写锁，整台服务卡住 30 秒后报“database is locked”/HTTP 500；Worker 上传产物还在接收整个快照期间持有写锁；会话提交也改到独立线程，不再与等锁的请求抢线程池。修复后 1 分钟 6 用户 3 Worker：交付 42 单、账本每次核对都平衡、最长持锁 1.05 s。同日 60 分钟（8 用户、3 Worker）：交付 2,666 单、60 次核对账本全部平衡、没有锁错误；结束时一次“unable to open database file”（开发用 SQLite 在高频开关连接时偶发打不开文件），改为连接池与线程数一致并对打开失败短暂重试；压测脚本同时记录进程句柄数（4 分钟内稳定在约 1,120，无泄漏）。48 小时连续压测（含真实 Office 卡死恢复）仍需在 Worker 机器上跑。2026-10-17 已有的自动化用例：已有自动化用例（`tests/test_ops.py`）：Worker 在阶段中途崩溃后租约过期，另一台空机器从快照恢复
 并继续，阶段只结算一次；看门狗超时会结束卡住的进程；磁盘不足时不领任务；模板版本不同时不领已开始的任务。
 
 ### P7 安全与隐私
@@ -514,7 +514,7 @@ CP3 管理员不能代批）、取消、系统失败退款、可重试失败退�
   - [x] 关闭代理的联网和网页搜索能力：不开 `--search`；实测发现本机默认配置下沙箱未生效，现强制 `windows.sandbox="unelevated"`，实测可拦截联网和任务目录外写入
   - [x] Worker 出网白名单脚本 `scripts/worker_firewall.ps1`：解析允许的主机（服务 API/存储、Codex 端点、Office 激活与证书吊销），默认只打印计划；`-Apply`（管理员）把出站默认改为阻止并只放行这些地址，`-Remove` 还原；CDN 地址会变，需每小时用计划任务重跑。未在本机应用（会断开本机网络），部署时在 Worker 机器上执行
   - [ ] 拒绝访问任务目录以外的路径：写入已拦截；**读取未拦截**（`deny_read` 需要 elevated 沙箱安装）。补偿措施：泄露拦截（扫描所有代理输出中的本机凭证和凭证形态，命中即失败且不上传）、本机只保留当前任务数据、阶段结束删除 rollout
-  - [ ] 机器上不放长期凭证，只有每任务的临时令牌（ChatGPT 账号登录的刷新令牌存在 Worker 上，需 D2 改用 API key 才能解决）
+  - [ ] 机器上不放长期凭证，只有每任务的临时令牌：模型网关已实现（Worker 只拿到绑定租约、有预算的任务令牌），但内测期仍用 ChatGPT 账号登录，刷新令牌存在 Worker 上；D2 切到 API key 后即可去掉
 - [x] 多租户隔离：不同用户的任务不共享目录、会话或参考图（每阶段新会话；上报后删除本机副本；模板默认不含 v66 等案例素材，见 D7）
 - [x] 经验闭环改造：任务内经验只生成“经验候选”，自动去除姓名、题目、数据等内容；
       经管理员审核后才合并进主仓库的 `improvement/`，客户原文不进全局台账

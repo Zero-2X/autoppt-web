@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import psutil
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -252,7 +253,11 @@ def main(argv: list[str] | None = None) -> int:
         time.sleep(min(args.check_every, max(deadline - time.monotonic(), 0.1)))
         ledger = admin_client.get("/api/admin/ledger/check", headers=admin).json()
         health = admin_client.get("/api/admin/health", headers=admin).json()
+        process = psutil.Process()
         checks.append({"t_min": round((time.monotonic() - started) / 60, 2), "ledger_ok": ledger["ok"],
+                       # API, workers and users share this process: a steady rise means a leaked file or socket.
+                       "open_handles": process.num_handles() if hasattr(process, "num_handles") else process.num_fds(),
+                       "open_files": len(process.open_files()),
                        "ledger_issues": ledger["issues"][:5], "alerts": [a["kind"] for a in health["alerts"]],
                        "waiting": health["queue"]["waiting"], "running": health["running_phases"]})
         print(json.dumps(checks[-1] | {"counts": stats.counts}, ensure_ascii=False), flush=True)
@@ -261,8 +266,12 @@ def main(argv: list[str] | None = None) -> int:
         thread.join(timeout=args.drain_minutes * 60)
     undrained = sum(thread.is_alive() for thread in users)
     stop_workers.set()
-    final_ledger = admin_client.get("/api/admin/ledger/check", headers=admin).json()
-    jobs = admin_client.get("/api/admin/jobs", headers=admin).json()
+    try:
+        final_ledger = admin_client.get("/api/admin/ledger/check", headers=admin).json()
+        jobs = admin_client.get("/api/admin/jobs", headers=admin).json()
+    except (httpx.HTTPError, ValueError) as exc:  # record a failing final read instead of losing the report
+        stats.error(f"final checks failed: {exc!r}")
+        final_ledger, jobs = {"ok": False, "issues": [repr(exc)]}, []
     durations = sorted(stats.durations)
 
     def pct(p: float) -> float | None:
