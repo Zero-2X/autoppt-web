@@ -470,3 +470,34 @@ def test_vectorize_job_through_the_api(api, world):
     paths = {d["path"] for d in detail["deliverables"]}
     assert "workspace/vectorize/reviewed-text.json" in paths
     ledger_ok(api)
+
+
+def test_admin_refunds_settled_credits_of_one_job(api, world):
+    admin, user = world["admin"], world["user"]
+    job = submit(api, world, "image_deck")
+    world["worker"].run_once()
+    world["worker"].run_once()  # planning settled, waiting at CP1
+    settled = job["estimate"]["phases"]["planning"]
+    before = credits(api, user)
+    url = f"/api/admin/jobs/{job['id']}/refund"
+    assert api.post(url, json={"credits": 1, "reason": "x"}, headers=user).status_code == 403
+    too_much = api.post(url, json={"credits": settled + 1, "reason": "大纲质量差"}, headers=admin)
+    assert too_much.status_code == 409 and str(settled) in too_much.text
+    assert api.post(url, json={"credits": 1, "reason": ""}, headers=admin).status_code == 422
+
+    once = {**admin, "Idempotency-Key": "r-1"}
+    reply = api.post(url, json={"credits": settled, "reason": "大纲质量差"}, headers=once)
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["refundable"] == 0
+    assert api.post(url, json={"credits": settled, "reason": "大纲质量差"}, headers=once).status_code == 200  # replay
+    assert credits(api, user)["balance"] == before["balance"] + settled
+    assert api.post(url, json={"credits": 1, "reason": "再退"}, headers=admin).status_code == 409
+    audit = api.get("/api/admin/audit", headers=admin).json()
+    assert [a["data"]["credits"] for a in audit if a["action"] == "job.refund"] == [settled]
+    with api.app.state.session_factory() as session:
+        from autoppt_api.models import Notification
+
+        assert session.query(Notification).filter(Notification.subject == "积分已退回").count() == 1
+    statement = credits(api, user)["statement"]
+    assert statement[0]["kind"] == "refund"
+    ledger_ok(api)

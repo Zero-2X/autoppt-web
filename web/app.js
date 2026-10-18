@@ -784,7 +784,16 @@ async function adminJobs() {
       h("td", {}, job.state === "blocked" ? h("button", { onclick: async () => {
         const to = prompt("恢复到哪个状态？（例如 planning）");
         if (to) { await api.post(`/api/admin/jobs/${job.id}/resume?to_state=${encodeURIComponent(to)}`); route(); }
-      } }, "恢复") : null))))));
+      } }, "恢复") : null,
+      h("button", { class: "secondary", onclick: async () => {
+        const credits = Number(prompt("退回多少积分给用户？（不超过该任务已结算的积分）"));
+        const reason = credits > 0 ? prompt("原因（会通知用户并记入审计）") : "";
+        if (!(credits > 0) || !reason) return;
+        try {
+          const result = await api.post(`/api/admin/jobs/${job.id}/refund`, { credits, reason }, { "Idempotency-Key": crypto.randomUUID() });
+          alert(`已退回 ${credits} 积分；该任务还可退 ${result.refundable} 积分`);
+        } catch (error) { alert(error.message); }
+      } }, "退积分")))))));
 }
 
 async function adminUsers() {

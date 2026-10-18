@@ -16,13 +16,15 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import mimetypes
 import secrets
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+import anyio
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -37,6 +39,7 @@ from autoppt_api.models import (
     Artifact,
     AuditLog,
     Checkpoint,
+    CreditTransaction,
     IdempotencyKey,
     Job,
     JobEvent,
@@ -174,6 +177,11 @@ class AdjustBody(BaseModel):
     memo: str = Field(min_length=1, max_length=300)
 
 
+class JobRefundBody(BaseModel):
+    credits: int = Field(gt=0)
+    reason: str = Field(min_length=1, max_length=300)
+
+
 class RedeemCodesBody(BaseModel):
     credits: int = Field(gt=0)
     count: int = Field(default=1, ge=1, le=500)
@@ -239,16 +247,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def _service_error(_request: Request, exc: ServiceError):
         return JSONResponse(status_code=exc.status, content={"code": exc.code, "message": exc.message, "details": exc.details})
 
-    def db() -> Iterator[Session]:
+    # Measured 2026-10-18 (scripts/stress_test.py): a sync dependency's teardown runs as a separate job in
+    # the same thread pool as the endpoints.  Requests waiting for the database write lock filled every
+    # thread, so the request holding the lock could not get a thread to commit, and all of them waited
+    # out the 30 s SQLite timeout ("database is locked").  Commits get their own threads.
+    commit_limiter = anyio.CapacityLimiter(8)
+
+    async def finish(call: Any) -> None:
+        with anyio.CancelScope(shield=True):  # a client disconnect must not leave the transaction open
+            await anyio.to_thread.run_sync(call, limiter=commit_limiter)
+
+    async def db() -> AsyncIterator[Session]:
         session = factory()
         try:
             yield session
-            session.commit()
+            await finish(session.commit)
         except BaseException:
-            session.rollback()
+            await finish(session.rollback)
             raise
         finally:
-            session.close()
+            await finish(session.close)
 
     def current_user(authorization: str = Header(default=""), session: Session = Depends(db)) -> User:
         if not authorization.lower().startswith("bearer "):
@@ -439,8 +457,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if code is None or (code.expires_at and aware(code.expires_at) < now()):
             raise HTTPException(404, "invalid or expired code")
         key = f"redeem:{code.id}:{user.id}"
-        from autoppt_api.models import CreditTransaction
-
         if session.scalars(select(CreditTransaction).where(CreditTransaction.business_key == key)).first() is None:
             if code.uses >= code.max_uses:
                 raise HTTPException(409, "code fully used")
@@ -485,14 +501,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         provider = provider_for(provider_name)
         body = await request.body()
         event = provider.parse_callback({k.lower(): v for k, v in request.headers.items()}, body)
-        with factory() as session:
-            try:
-                result = payments_module.handle_callback(session, provider, event)
-            except ServiceError:
-                session.commit()  # keep the audit record of a rejected callback
-                raise
-            session.commit()
-        return result
+
+        def handle() -> dict[str, Any]:  # in a thread, like put_chunk: never wait for the DB lock on the event loop
+            with factory() as session:
+                try:
+                    result = payments_module.handle_callback(session, provider, event)
+                except ServiceError:
+                    session.commit()  # keep the audit record of a rejected callback
+                    raise
+                session.commit()
+                return result
+
+        return await anyio.to_thread.run_sync(handle)
 
     @app.post("/api/admin/orders/{order_id}/refund")
     def admin_refund(order_id: str, admin: User = Depends(admin_user), session: Session = Depends(db)) -> dict[str, Any]:
@@ -533,24 +553,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             upload_id = verify_url_token(settings.secret_key, token, purpose="upload")
         except TokenError as exc:
             raise HTTPException(403, str(exc)) from exc
-        with factory() as session:
-            upload = session.get(UploadSession, upload_id)
-            if upload is None or upload.status != "open":
-                raise HTTPException(409, "upload is not open")
-            limit = upload.expected_size
+        # Database and file work runs in threads: blocking calls here stalled the event loop while SQLite
+        # waited for the write lock, which froze every request including the one holding the lock.
+        def expected_size() -> int:
+            with factory() as session:
+                upload = session.get(UploadSession, upload_id)
+                if upload is None or upload.status != "open":
+                    raise HTTPException(409, "upload is not open")
+                return upload.expected_size
+
+        def record(received: int) -> None:
+            with factory() as session:
+                session.get(UploadSession, upload_id).received = received
+                session.commit()
+
+        limit = await anyio.to_thread.run_sync(expected_size)
         data = await request.body()
         if len(data) > CHUNK_SIZE:
             raise HTTPException(413, "chunk too large")
         import io
 
         try:
-            received = storage.append(upload_id, offset, io.BytesIO(data), limit)
+            received = await anyio.to_thread.run_sync(lambda: storage.append(upload_id, offset, io.BytesIO(data), limit))
         except StorageError as exc:
             raise HTTPException(409, str(exc)) from exc
-        with factory() as session:
-            upload = session.get(UploadSession, upload_id)
-            upload.received = received
-            session.commit()
+        await anyio.to_thread.run_sync(record, received)
         return {"received": received, "expected": limit}
 
     @app.post("/api/uploads/{upload_id}/complete")
@@ -737,22 +764,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.put("/api/worker/jobs/{job_id}/artifacts")
     async def worker_artifact(job_id: str, request: Request, kind: str = Query(pattern="^(preview|deliverable|snapshot|report)$"),
                               path: str = Query(min_length=1, max_length=300), lease_token: str = Query(...),
-                              worker: Worker = Depends(current_worker), session: Session = Depends(db)) -> dict[str, Any]:
-        # Same session as the worker lookup: a second session would wait on SQLite's write lock.
+                              authorization: str = Header(default="")) -> dict[str, Any]:
+        # The body (snapshots run to many MB) is received before any database work, and the database work
+        # runs in a thread: holding SQLite's write lock during the transfer, or waiting for it on the event
+        # loop, stalled every other request (scripts/stress_test.py, 2026-10-18).
         from autoppt_api.services import require_lease
 
-        job = leased(job_id, worker, session)
-        require_lease(job, worker, lease_token)
         data = await request.body()
         if len(data) > settings.max_upload_bytes * 5:
             raise HTTPException(413, "artifact too large")
-        sha, stored_path = storage.put_bytes(data)
-        if session.get(StoredFile, sha) is None:
-            session.add(StoredFile(sha256=sha, size=len(data), storage_key=storage.key_for(sha),
-                                   sniffed_kind=sniff_kind(data[:8192], stored_path), scan_status="worker_output"))
-            session.flush()
-        artifact = register_artifact(session, job, kind=kind, path=path, sha256=sha, size=len(data))
-        return {"artifact_id": artifact.id, "sha256": sha}
+
+        def register() -> dict[str, Any]:
+            with factory() as session:
+                worker = current_worker(authorization, session)
+                job = leased(job_id, worker, session)
+                require_lease(job, worker, lease_token)
+                sha, stored_path = storage.put_bytes(data)
+                if session.get(StoredFile, sha) is None:
+                    session.add(StoredFile(sha256=sha, size=len(data), storage_key=storage.key_for(sha),
+                                           sniffed_kind=sniff_kind(data[:8192], stored_path), scan_status="worker_output"))
+                    session.flush()
+                artifact = register_artifact(session, job, kind=kind, path=path, sha256=sha, size=len(data))
+                session.commit()
+                return {"artifact_id": artifact.id, "sha256": sha}
+
+        return await anyio.to_thread.run_sync(register)
 
     @app.post("/api/worker/jobs/{job_id}/complete")
     def worker_complete(job_id: str, body: PhaseReport, worker: Worker = Depends(current_worker), session: Session = Depends(db),
@@ -864,6 +900,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, "job not found")
         return job_view(session, resume_blocked(session, job, actor=admin.id, previous_state=to_state))
 
+    @app.post("/api/admin/jobs/{job_id}/refund")
+    def admin_job_refund(job_id: str, body: JobRefundBody, admin: User = Depends(admin_user), session: Session = Depends(db),
+                         idempotency_key: str | None = Header(default=None)) -> dict[str, Any]:
+        """Return settled credits for one job (a poor delivery, a goodwill gesture); never more than it earned."""
+        job = session.get(Job, job_id)
+        if job is None:
+            raise HTTPException(404, "job not found")
+        key = f"job-refund:{job_id}:{idempotency_key or secrets.token_hex(8)}"
+        if session.scalars(select(CreditTransaction).where(CreditTransaction.business_key == key)).first() is None:
+            refundable = ledger.job_revenue(session, job_id)
+            if body.credits > refundable:
+                raise HTTPException(409, f"only {refundable} settled credits can be refunded for this job")
+            ledger.refund(session, job_id, job.user_id, body.credits, business_key=key, memo=body.reason)
+            session.add(Notification(user_id=job.user_id, subject="积分已退回",
+                                     body=f"任务 {job.title or job_id[:8]} 退回 {body.credits} 积分。原因：{body.reason}"))
+            audit(session, "admin", admin.id, "job.refund", job_id, credits=body.credits, reason=body.reason)
+        account = ledger.user_account(session, job.user_id)
+        return {"job_id": job_id, "refundable": ledger.job_revenue(session, job_id), "balance": account.balance}
+
     @app.get("/api/admin/lessons")
     def admin_lessons(status: str = "pending", _admin: User = Depends(admin_user), session: Session = Depends(db)) -> list[dict[str, Any]]:
         return [{"id": l.id, "job_id": l.job_id, "payload": l.payload, "status": l.status}
@@ -898,6 +953,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     web_root = Path(__file__).resolve().parents[1] / "web"
     if web_root.is_dir():
+        # Windows takes MIME types from the registry, where .js can be text/plain; browsers then refuse to run
+        # the front end's ES modules (the login page stayed empty on the CI runner, 2026-10-18).
+        mimetypes.add_type("text/javascript", ".js")
+        mimetypes.add_type("text/css", ".css")
         # The single-page front end; API routes above take precedence.
         app.mount("/", StaticFiles(directory=web_root, html=True), name="web")
 

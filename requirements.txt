@@ -16,6 +16,8 @@ pdfplumber
 pillow-heif
 # Backend API:
 alembic
+# Fernet encryption of stored uploads (AUTOPPT_API_STORAGE_KEY).
+cryptography
 fastapi
 httpx
 pydantic

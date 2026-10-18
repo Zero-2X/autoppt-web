@@ -22,7 +22,9 @@ THRESHOLDS = {
     "failure_rate": 0.2,           # failed / finished in 24h
     "worker_offline_minutes": 10,  # no heartbeat
     "phase_running_hours": 12,     # one phase running this long is stuck
-    "estimate_overrun": 1.5,       # usage cost over the estimate (once cost rates exist)
+    "estimate_overrun": 1.5,       # model + Office cost over the estimate's value (needs cost rates; 0 with the account pool)
+    # Agent input tokens of one job.  Measured: the 9-page J-plan-real-001 used 44 M (93% cached) end to end.
+    "job_input_tokens": 60_000_000,
 }
 
 
@@ -68,6 +70,9 @@ def health(session: Session, *, lease_timeout_s: int = 900) -> dict[str, Any]:
         alerts.append({"kind": "work_without_workers", "detail": f"{len(waiting)} phases waiting and no worker online"})
     if deferred:
         alerts.append({"kind": "account_limits", "detail": f"{len(deferred)} phases deferred by Codex usage limits"})
+    costly = job_cost_alerts(session, since)
+    if costly:
+        alerts.append({"kind": "job_cost", "detail": "; ".join(costly)})
     versions = sorted({w["template_version"] for w in online if w["template_version"]})
     return {
         "generated_at": iso(current),
@@ -82,6 +87,28 @@ def health(session: Session, *, lease_timeout_s: int = 900) -> dict[str, Any]:
         "alerts": alerts,
         "thresholds": THRESHOLDS,
     }
+
+
+def job_cost_alerts(session: Session, since) -> list[str]:
+    """Jobs running or finished since ``since`` whose tokens or cost run past the thresholds."""
+    from autoppt_api.pricing import DEFAULT_RULES, active_rules
+    from autoppt_api.reports import job_cost
+
+    _, rules = active_rules(session)
+    rates = rules.get("cost_rates", DEFAULT_RULES["cost_rates"])
+    value = float(rules.get("credit_value_cents", DEFAULT_RULES["credit_value_cents"]))
+    jobs = session.scalars(select(Job).where((Job.finished_at.is_(None)) | (Job.finished_at >= since))
+                           .where(Job.submitted_at.is_not(None))).all()
+    found = []
+    for job in jobs:
+        cost = job_cost(session, job, rates)
+        if cost["tokens"]["input"] > THRESHOLDS["job_input_tokens"]:
+            found.append(f"{job.id[:8]} used {cost['tokens']['input'] / 1e6:.1f} M input tokens")
+        budget = float((job.estimate or {}).get("total") or 0) * value
+        spent = cost["model_cents"] + cost["office_cents"]
+        if budget and spent > budget * THRESHOLDS["estimate_overrun"]:
+            found.append(f"{job.id[:8]} cost {spent / 100:.2f} CNY against an estimate worth {budget / 100:.2f} CNY")
+    return found
 
 
 def notify_admins(session: Session, report: dict[str, Any]) -> int:

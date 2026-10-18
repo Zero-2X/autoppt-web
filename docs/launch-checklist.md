@@ -7,7 +7,8 @@
 - [x] CI 拉取工作流仓库：2026-10-18 Claude 在 `Zero-2X/autoppt` 加了只读 deploy key “autoppt-web CI (read-only)”，私钥存为 secret `AUTOPPT_REPO_SSH_KEY`（不再需要 `AUTOPPT_REPO_TOKEN`）；撤销时两处一起删
 - [ ] Worker 机器：专用 Windows 账号自动登录；运行 `scripts/install_worker.ps1`；`worker_check` 全部通过（含 office 能力）
 - [ ] 完成 Codex elevated 沙箱安装并配置 `deny_read`，重跑[安全模型](security-model.md)第 1 节探针，确认读取也被拦截
-- [ ] Worker 出网白名单（防火墙）
+- [ ] Worker 出网白名单：在 Worker 机器上以管理员运行 `scripts/worker_firewall.ps1 -AllowHost <API 与存储主机> -Apply`，并建每小时重跑的计划任务（`-Apply -Quiet`）
+- [ ] 在 Worker 机器上跑 48 小时压测：`python scripts/stress_test.py --minutes 2880 --database-url <PostgreSQL>`（mock Worker）以及真实 Office 卡死恢复
 - [ ] 生产配置：`AUTOPPT_API_SECRET_KEY`、`AUTOPPT_API_STORAGE_KEY`（静态加密）、PostgreSQL、对象存储、SMTP；`alembic upgrade head`
 - [ ] 计划任务：`python -m autoppt_api.maintenance all` 每 5 分钟（通知、过期、对账、告警、账本核对、清理）
 - [ ] 补全 `autoppt_service/templates/redactions.json` 后构建 Worker 模板；处理模板清单里列出的“代码中含案例名”的脚本

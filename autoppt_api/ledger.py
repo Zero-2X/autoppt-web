@@ -221,6 +221,16 @@ def release_hold(session: Session, job_id: str) -> int:
     return released
 
 
+def job_revenue(session: Session, job_id: str) -> int:
+    """Net credits this job brought to revenue (settlements and paid redos minus refunds)."""
+    revenue = system_account(session, "revenue")
+    return int(session.scalar(
+        select(func.coalesce(func.sum(CreditEntry.amount), 0))
+        .join(CreditTransaction, CreditTransaction.id == CreditEntry.transaction_id)
+        .where(CreditTransaction.job_id == job_id, CreditEntry.account_id == revenue.id)
+    ) or 0)
+
+
 def refund(session: Session, job_id: str, user_id: str, amount: int, *, business_key: str, memo: str = "") -> CreditTransaction:
     """Return already-settled credits (revenue -> user)."""
     return post(session, kind="refund", business_key=business_key, job_id=job_id, memo=memo,

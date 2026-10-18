@@ -11,6 +11,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -338,7 +339,7 @@ class UsageRecord(Base):
     input_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
     cached_input_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
     output_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
-    seconds: Mapped[float] = mapped_column(default=0.0)
+    seconds: Mapped[float] = mapped_column(Float, default=0.0)  # SQLAlchemy 2.1 maps bare float to Double
     business_key: Mapped[str] = mapped_column(String(160), unique=True)
     data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = _created()

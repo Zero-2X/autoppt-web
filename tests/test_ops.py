@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -172,3 +173,50 @@ def test_reconstruction_needs_both_codex_and_office(api, world):
         session.commit()
     assert api.post("/api/worker/lease", json={}, headers={"Authorization": f"Bearer {office_only['token']}"}).status_code == 204
     assert api.post("/api/worker/lease", json={}, headers={"Authorization": f"Bearer {full['token']}"}).json()["phase"] == "reconstruct"
+
+
+def test_job_cost_alert_on_tokens_and_on_cost_over_estimate(api, world):
+    from autoppt_api.models import PricingRule, UsageRecord
+    from autoppt_api.monitoring import health
+    from autoppt_api.pricing import DEFAULT_RULES
+
+    job = api.post("/api/jobs", json={"request": request_body(world["sha"])}, headers=world["user"]).json()
+    total = api.post(f"/api/jobs/{job['id']}/estimate", headers=world["user"]).json()["total"]
+    api.post(f"/api/jobs/{job['id']}/submit", json={"confirm_total": total}, headers=world["user"])
+    with api.app.state.session_factory() as session:
+        session.add(UsageRecord(job_id=job["id"], phase="reconstruct", kind="agent_turn", input_tokens=41_000_000,
+                                cached_input_tokens=38_000_000, output_tokens=280_000, business_key="u1"))
+        session.commit()
+        assert not [a for a in health(session)["alerts"] if a["kind"] == "job_cost"]  # 41 M: under 60 M, no rates
+        session.add(UsageRecord(job_id=job["id"], phase="reconstruct", kind="agent_turn", input_tokens=25_000_000,
+                                business_key="u2"))
+        session.commit()
+        alert = next(a for a in health(session)["alerts"] if a["kind"] == "job_cost")
+        assert f"{job['id'][:8]} used 66.0 M input tokens" in alert["detail"]
+
+        # With API-key rates (D2), a job whose cost exceeds 1.5x its estimate's value is reported too.
+        rules = {**DEFAULT_RULES, "credit_value_cents": 10,
+                 "cost_rates": {**DEFAULT_RULES["cost_rates"], "input_per_million_cents": 1000}}
+        for rule in session.query(PricingRule).filter(PricingRule.active.is_(True)):
+            rule.active = False
+        session.add(PricingRule(version=99, active=True, rules=rules, note="test"))
+        session.commit()
+        alert = next(a for a in health(session)["alerts"] if a["kind"] == "job_cost")
+        assert "against an estimate worth" in alert["detail"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Firewall script")
+def test_worker_firewall_plan_and_refusal():
+    script = Path(__file__).resolve().parents[1] / "scripts" / "worker_firewall.ps1"
+
+    def run(*args: str):
+        command = f"& '{script}' -AllowHost localhost,127.0.0.1 -ModelHost example.invalid -SystemHost '' {' '.join(args)}"
+        return subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+
+    plan = json.loads(run().stdout)  # no -Apply: prints the plan, changes nothing
+    assert plan["default_outbound"] == "Block" and plan["unresolved"] == ["example.invalid"]
+    allowed = next(rule for rule in plan["rules"] if rule["name"].endswith("allowed hosts"))
+    assert "127.0.0.1" in allowed["remote_address"].split(",")
+    refused = run("-Apply")  # an unresolvable host is refused before any rule is touched
+    assert refused.returncode != 0 and "cannot resolve example.invalid" in refused.stderr + refused.stdout
