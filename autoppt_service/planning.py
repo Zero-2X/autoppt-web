@@ -270,6 +270,24 @@ def outline_markdown(plan: dict[str, Any], warnings: Sequence[str]) -> str:
     return "\n".join(lines)
 
 
+# The workflow's prompt builder (read-only) writes a 16:9 canvas into every prompt; other ratios are rewritten
+# here.  The workflow gate still finds its full-slide contract ("whole output must be one finished slide page").
+ASPECT_CANVAS = {"4:3": "1440x1080"}
+
+
+def apply_aspect_ratio(prompts: dict[str, Any], aspect: str) -> None:
+    canvas = ASPECT_CANVAS[aspect]
+    for item in prompts["slides"]:
+        text = item["prompt_zh"]
+        for old, new in (("complete final 16:9 PowerPoint slide image", f"complete final {aspect} PowerPoint slide image"),
+                         ("Canvas: 1920x1080 horizontal.", f"Canvas: {canvas} ({aspect}) horizontal.")):
+            if old not in text:
+                raise ValueError(f"{item['slide_id']}: the workflow prompt no longer contains {old!r}; cannot set {aspect}")
+            text = text.replace(old, new)
+        item["prompt_zh"] = text
+        item["image_size"] = aspect
+
+
 def build_workflow_inputs(job_dir: Path, plan: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
     """Feed the plan to the workflow's prompt builder; the Worker, not the agent, fixes the style."""
     deck = {
@@ -293,6 +311,8 @@ def build_workflow_inputs(job_dir: Path, plan: dict[str, Any], request: dict[str
                 "stable, solid, untextured sans-serif lettering in clean text regions.")
         for item in prompts["slides"]:
             item["prompt_zh"] = f"{item['prompt_zh']}\nFont preference: {note}"
+    if request["delivery"].get("aspect_ratio", "16:9") != "16:9":
+        apply_aspect_ratio(prompts, request["delivery"]["aspect_ratio"])
     write_json_atomic(job_dir / "deck-spec.json", deck_spec)
     write_json_atomic(job_dir / "image-prompts.json", prompts)
     return {"deck_spec": "deck-spec.json", "image_prompts": "image-prompts.json", "slides": len(deck_spec["slides"])}
@@ -317,8 +337,6 @@ def run_planning_agent(
     if not check["matching"]:
         raise PlanningBlocked([f"worker template {check['version']} was modified after it was built"])
     request = read_json(service_path(job_dir, "job-request.json"))
-    if request["delivery"]["aspect_ratio"] != "16:9":
-        raise PlanningBlocked(["the workflow prompt builder only produces 16:9 slides; 4:3 is not supported yet"])
     brief = read_json(job_dir / HANDOFF_DIR / "planning-brief.json")
     ledger = read_json(job_dir / EVIDENCE_DIR / "evidence-ledger.json") or {}
     manifest = read_json(job_dir / EVIDENCE_DIR / "source-manifest.json") or {}

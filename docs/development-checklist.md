@@ -359,7 +359,7 @@ draft → estimated → paid(积分冻结) → queued → intake → planning
         （页数、每条已审核文字必须是原生文字、整页图片不算可编辑、有图表数据时必须是带工作簿的真图表）、用 PowerPoint 渲染、把问题发回或打开 CP3；
         2026-10-17/18 用真实 Codex + PowerPoint 跑通一份 9 页样例：母版 24 轮、原生重建 4 轮约 3,778 万输入 token，
         途中补上残留文字、原生形状、渲染可见性、坐标轴 id、额度延后、恢复先复查等门禁，见 [实测记录](p1-real-run-masters-reconstruct.md)
-  - [ ] 4:3 画幅在 planning 阶段 `blocked`（原仓库提示词构建器只支持 16:9）
+  - [x] 4:3 画幅：原仓库提示词构建器只写 16:9，服务侧把每页提示改写为 4:3 画布（1440x1080，保留工作流门禁要求的整页约定）；图片版由服务按 10 x 7.5 in 打包（原仓库 `build_image_deck.py` 只做 16:9）；母版比例偏差超过 3% 在 CP2 报出。ImageGen 是否按 4:3 出图尚未实测
 - [ ] 准备 3–5 份脱敏样例（论文答辩、国自然申请、组会报告、纯描述无文档、矢量化），逐份实跑
 - [ ] 记录每份样例的耗时、费用、轮数、失败点，据此定价和设定各阶段预算
 - [x] 给新模块补 pytest 用例；`--mock` 路径跑通全流程（供后端联调）：`python -m autoppt_service.run_job req.json --job-dir <dir> --job-id J1 --uploads uploads.json --phase all --mock --auto-respond`
@@ -516,9 +516,9 @@ CP3 管理员不能代批）、取消、系统失败退款、可重试失败退�
       经管理员审核后才合并进主仓库的 `improvement/`，客户原文不进全局台账
 - [x] 数据生命周期：到期自动删除、用户可一键删除、删除留审计记录；对象存储加密（可选 Fernet 静态加密，生产必须配置密钥）
 - [x] 管理员操作审计；查看用户文件需要单独授权并留痕（必须填写原因，每次访问写审计日志）
-- [ ] 依赖与密钥扫描；`.env` 不入库（`.gitignore` 已覆盖）
+- [x] 依赖与密钥扫描；`.env` 不入库（`.gitignore` 已覆盖）
   - [x] 测试扫描受跟踪文件中的密钥
-  - [ ] 依赖漏洞扫描（`pip-audit`）
+  - [x] 依赖漏洞扫描：CI 对服务的 `requirements.txt` 跑 `pip-audit`（2026-10-18 本机结果：无已知漏洞）
 
 **验收**：用一份带恶意指令的测试文档跑任务，代理无法读取其他目录、访问外网或拿到 key。
 **2026-10-17 状态**：未通过。联网和目录外写入已实测拦截；读取其他目录和账号凭证仍然可以，靠泄露拦截兜底（自动化测试覆盖）。
@@ -528,7 +528,7 @@ CP3 管理员不能代批）、取消、系统失败退款、可重试失败退�
 上线前需要人来完成的事项见 [launch-checklist.md](launch-checklist.md)。
 
 - [x] CI：现有 `pytest -q` 加新模块测试，加 `validate_skill_portability.py`，加 mock 端到端测试（`.github/workflows/ci.yml`，Windows 运行；
-      需要先在仓库里添加 `AUTOPPT_REPO_TOKEN` secret 才能拉取私有的工作流仓库，未添加前 CI 会失败）
+      私有的工作流仓库用只读 deploy key 拉取：`Zero-2X/autoppt` 上的 “autoppt-web CI (read-only)”，私钥存为本仓库 secret `AUTOPPT_REPO_SSH_KEY`，2026-10-18 添加）
 - [ ] 金标准样例集：P1 的样例加上真实内测件（经用户授权），每次升级 Worker 模板都回归跑一遍，
       对比质量、耗时和费用（工具 `scripts/run_samples.py` 已写好，结果按模板版本记录；样例集还没准备）
 - [x] 前端端到端测试（例如 Playwright），覆盖下单、三个检查点和下载（`tests/test_e2e_browser.py`：真实后端 + mock Worker + 无头 Chromium，45 秒）

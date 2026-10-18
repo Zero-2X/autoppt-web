@@ -4,7 +4,7 @@
 
 ## 1. 内测前（技术）
 
-- [ ] 在 GitHub 仓库设置里添加 secret `AUTOPPT_REPO_TOKEN`（对 `Zero-2X/autoppt` 只读的 fine-grained token），让 CI 能拉取工作流仓库；确认 CI 通过
+- [x] CI 拉取工作流仓库：2026-10-18 Claude 在 `Zero-2X/autoppt` 加了只读 deploy key “autoppt-web CI (read-only)”，私钥存为 secret `AUTOPPT_REPO_SSH_KEY`（不再需要 `AUTOPPT_REPO_TOKEN`）；撤销时两处一起删
 - [ ] Worker 机器：专用 Windows 账号自动登录；运行 `scripts/install_worker.ps1`；`worker_check` 全部通过（含 office 能力）
 - [ ] 完成 Codex elevated 沙箱安装并配置 `deny_read`，重跑[安全模型](security-model.md)第 1 节探针，确认读取也被拦截
 - [ ] Worker 出网白名单（防火墙）

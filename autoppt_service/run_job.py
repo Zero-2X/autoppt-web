@@ -204,13 +204,15 @@ def _mock_image(path: Path, slide_id: str, label: str, *, aspect: str, tint: tup
     image.save(path, "PNG")
 
 
+SLIDE_SIZE_EMU = {"16:9": (12192000, 6858000), "4:3": (9144000, 6858000)}  # 13.333 x 7.5 in, 10 x 7.5 in
+
+
 def _image_deck(path: Path, images: list[Path], aspect: str) -> None:
     from pptx import Presentation
     from pptx.util import Emu
 
     presentation = Presentation()
-    presentation.slide_width = Emu(12192000)
-    presentation.slide_height = Emu(6858000 if aspect == "16:9" else 9144000)
+    presentation.slide_width, presentation.slide_height = (Emu(v) for v in SLIDE_SIZE_EMU[aspect])
     for image in images:
         slide = presentation.slides.add_slide(presentation.slide_layouts[6])
         slide.shapes.add_picture(str(image), 0, 0, presentation.slide_width, presentation.slide_height)
@@ -223,8 +225,7 @@ def _mock_native_deck(path: Path, slides: list[dict[str, Any]], aspect: str) -> 
     from pptx.util import Emu, Pt
 
     presentation = Presentation()
-    presentation.slide_width = Emu(12192000)
-    presentation.slide_height = Emu(6858000 if aspect == "16:9" else 9144000)
+    presentation.slide_width, presentation.slide_height = (Emu(v) for v in SLIDE_SIZE_EMU[aspect])
     for slide in slides:
         page = presentation.slides.add_slide(presentation.slide_layouts[6])
         box = page.shapes.add_textbox(Emu(457200), Emu(228600), Emu(11277600), Emu(914400))
@@ -503,15 +504,20 @@ def phase_masters(job_dir: Path, *, mock: bool, profiles_path: Path | None = Non
                 return {"phase": "masters", "job_state": state["state"], "issues": report["handoff_issues"]}
         masters = {sid: path for sid, path in discover_slides(job_dir / MASTERS_DIR).items()}
         findings: list[str] = []
+        if not mock:
+            from autoppt_service.master_qa import check_master_aspect
+
+            findings += check_master_aspect(masters, request["delivery"]["aspect_ratio"])
         if not mock and os.name == "nt":
             from autoppt_service.master_qa import check_master_charts, check_master_numbers, ocr_masters
             from autoppt_service.vectorize import VectorizeError, windows_ocr
 
             try:
                 results = ocr_masters(job_dir, masters, ocr=windows_ocr)
-                findings = check_master_numbers(job_dir, masters, ocr=windows_ocr, results=results)
+                findings += check_master_numbers(job_dir, masters, ocr=windows_ocr, results=results)
             except (VectorizeError, OSError, ValueError) as exc:
-                results, findings = None, [f"number check on masters did not run: {exc}"]
+                results = None
+                findings.append(f"number check on masters did not run: {exc}")
             try:  # report-only, like the number check: ImageGen charts without a chart-data table
                 findings += check_master_charts(job_dir, masters, ocr=windows_ocr, results=results)
             except (VectorizeError, OSError, ValueError) as exc:
@@ -681,7 +687,8 @@ def phase_package(job_dir: Path, *, job_id: str, mock: bool) -> dict[str, Any]:
     with phase_timer(job_dir, "package", mock=mock):
         if tier == "image_deck":
             deck = job_dir / OUTPUT_DIR / "image-deck.pptx"
-            if mock:
+            if mock or request["delivery"]["aspect_ratio"] != "16:9":
+                # The workflow's build_image_deck.py only makes 13.333 x 7.5 in slides.
                 _image_deck(deck, list(discover_slides(job_dir / MASTERS_DIR).values()), request["delivery"]["aspect_ratio"])
             else:
                 _build_image_deck_with_repo(job_dir, deck)

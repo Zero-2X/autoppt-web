@@ -197,15 +197,41 @@ def test_revision_round_passes_user_words(setup):
     assert (job / "service/codex-runs/planning-r2-a1").is_dir()
 
 
-def test_missing_template_or_4_3_is_reported(setup, monkeypatch):
+def test_missing_template_is_reported(setup, monkeypatch):
     monkeypatch.delenv("AUTOPPT_WORKER_TEMPLATE", raising=False)
     with pytest.raises(PhaseNotReady, match="worker template"):
         run_phase(setup["job"], "planning", job_id="J1")
+
+
+def test_4_3_prompts_ask_for_a_4_3_canvas(setup):
     request = read_json(service_path(setup["job"], "job-request.json"))
     request["delivery"]["aspect_ratio"] = "4:3"
     service_path(setup["job"], "job-request.json").write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
-    result = setup["plan"]()
-    assert result["job_state"] == "blocked" and "16:9" in result["issues"][0]
+    assert setup["plan"]()["job_state"] == "cp1_outline"
+    prompts = read_json(setup["job"] / "image-prompts.json")["slides"]
+    for item in prompts:
+        assert item["image_size"] == "4:3"
+        assert "complete final 4:3 PowerPoint slide image" in item["prompt_zh"]
+        assert "Canvas: 1440x1080 (4:3) horizontal. The whole output must be one finished slide page." in item["prompt_zh"]
+        assert "16:9" not in item["prompt_zh"] and "1920x1080" not in item["prompt_zh"]
+
+
+def test_4_3_image_deck_and_master_shape_check(tmp_path):
+    from PIL import Image
+    from pptx import Presentation
+
+    from autoppt_service.master_qa import check_master_aspect
+    from autoppt_service.run_job import _image_deck
+
+    masters = {}
+    for slide_id, size in (("S01", (1448, 1086)), ("S02", (1672, 941))):
+        masters[slide_id] = tmp_path / f"{slide_id}.png"
+        Image.new("RGB", size).save(masters[slide_id])
+    assert check_master_aspect(masters, "4:3") == ["S02: master is 1672x941 (ratio 1.78), not 4:3"]
+    assert check_master_aspect({"S02": masters["S02"]}, "16:9") == []
+    _image_deck(tmp_path / "deck.pptx", [masters["S01"]], "4:3")
+    deck = Presentation(str(tmp_path / "deck.pptx"))
+    assert (deck.slide_width, deck.slide_height) == (9144000, 6858000)
 
 
 # ---------------------------------------------------------------- validator

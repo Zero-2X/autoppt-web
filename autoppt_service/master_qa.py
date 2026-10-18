@@ -258,3 +258,25 @@ def check_master_charts(job_dir: Path, masters: dict[str, Path], *, ocr: OcrRunn
                             "but the slide's plan cites no table in chart-data.json; its values have no source data")
     write_json_atomic(job_dir / QA_DIR / "charts.json", {"slides": report, "findings": findings})
     return findings
+
+
+# --- canvas shape --------------------------------------------------------------------------------
+
+ASPECT_VALUES = {"16:9": 16 / 9, "4:3": 4 / 3}
+
+
+def check_master_aspect(masters: dict[str, Path], aspect: str, *, tolerance: float = 0.03) -> list[str]:
+    """Masters whose width/height is off the ordered ratio by more than ``tolerance`` (relative).
+
+    The prompt asks ImageGen for the ratio; whether it obeys for 4:3 is not yet measured, and a stretched
+    master would make every later stage (OCR boxes, native layout) wrong."""
+    from PIL import Image
+
+    wanted = ASPECT_VALUES[aspect]
+    findings = []
+    for slide_id, path in sorted(masters.items()):
+        with Image.open(path) as image:
+            width, height = image.size
+        if abs(width / height - wanted) / wanted > tolerance:
+            findings.append(f"{slide_id}: master is {width}x{height} (ratio {width / height:.2f}), not {aspect}")
+    return findings

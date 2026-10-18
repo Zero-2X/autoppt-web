@@ -188,7 +188,9 @@ wording.
 
 Write:
 
-- `output/native-deck.pptx`: one slide per master, same order, 16:9.
+- `output/native-deck.pptx`: one slide per master, same order, at
+  `delivery.aspect_ratio` from `service/job-request.json` (16:9 is 13.333 x 7.5 in,
+  4:3 is 10 x 7.5 in).
   Ordinary text, titles, labels and table text are native text boxes in
   Microsoft YaHei (DengXian as fallback). Cards, lines, arrows, nodes and simple
   diagrams are native shapes. Data plots from `chart-data.json` are real
