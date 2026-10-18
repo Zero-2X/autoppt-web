@@ -115,6 +115,37 @@ def _cjk_count(text: str) -> int:
     return sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
 
 
+# Ink (grey-level spread) inside a master line's box, render vs master.  Measured 2026-10-18: visible
+# native lines 0.76-1.07 (stroke shifts make raw pixel differences useless); the covered r3 S07 title 0.05.
+MIN_INK_RATIO = 0.5
+MIN_MASTER_INK = 10.0  # a flat box on the master says nothing about the render
+
+
+def _ocr_normalized(text: str) -> str:
+    from autoppt_service.vectorize import OCR_SPLITS, join_cjk
+
+    text = join_cjk(text)
+    for split, joined in OCR_SPLITS.items():
+        text = text.replace(split, joined)
+    return text
+
+
+def ink_ratio(master: Path, render: Path, bbox: dict[str, Any], master_size: tuple[int, int]) -> float | None:
+    """Render ink / master ink inside one master OCR line box; None when the master box is flat."""
+    from PIL import Image, ImageStat
+
+    with Image.open(master) as a, Image.open(render) as b:
+        a = a.convert("L").resize(master_size)
+        b = b.convert("L").resize(master_size)
+        pad = 4
+        box = (max(int(bbox["x"]) - pad, 0), max(int(bbox["y"]) - pad, 0),
+               min(int(bbox["x"] + bbox["w"]) + pad, master_size[0]), min(int(bbox["y"] + bbox["h"]) + pad, master_size[1]))
+        master_ink = ImageStat.Stat(a.crop(box)).stddev[0]
+        if master_ink < MIN_MASTER_INK:
+            return None
+        return ImageStat.Stat(b.crop(box)).stddev[0] / master_ink
+
+
 def render_visibility_errors(
     renders: dict[str, Path], targets: dict[str, list[str]], *, ocr: Callable[[Path, Path], dict[str, Any]], work_dir: Path,
     masters: dict[str, Path] | None = None,
@@ -122,38 +153,57 @@ def render_visibility_errors(
     """Measured on the first real deck: titles and values present in the PPTX but invisible in PowerPoint.
 
     Checks the reviewed text, and every longer line OCR reads on the approved master (titles the master
-    shows must survive even when the plan worded them differently).  A line that looks missing is read
-    again on a 2x upscaled render first: measured 2026-10-18, Windows OCR skipped small but clearly
-    visible 12-14 px lines that the upscaled render reads.
+    shows must survive even when the plan worded them differently).  A line OCR cannot find in the render
+    is read again on a 2x upscaled render, and is reported only when the render also lacks the master's
+    ink where the master shows that line.  Measured 2026-10-18: Windows OCR skipped small visible
+    lines, read a white-on-dark title as character components and split 外 into 夕卜, so three agent
+    sessions chased text that was plainly visible.
     """
     from PIL import Image
 
-    from autoppt_service.vectorize import join_cjk
+    def read(image: Path, name: str) -> dict[str, Any]:
+        return ocr(Path(image), work_dir / name)
 
-    def read(image: Path, name: str) -> list[str]:
-        result = ocr(Path(image), work_dir / name)
-        return [join_cjk(line.get("text", "")) for line in result.get("lines", [])]
+    def texts(result: dict[str, Any]) -> list[str]:
+        return [_ocr_normalized(line.get("text", "")) for line in result.get("lines", [])]
 
     errors = []
     work_dir.mkdir(parents=True, exist_ok=True)
     for slide_id, image in sorted(renders.items()):
-        text = " ".join(read(image, f"{slide_id}-render.json"))
+        text = " ".join(texts(read(image, f"{slide_id}-render.json")))
         expected = list(targets.get(slide_id, []))
+        master_result: dict[str, Any] = {}
         master_lines: list[str] = []
         if masters and slide_id in masters:
-            master_lines = [line for line in read(masters[slide_id], f"{slide_id}-master.json")
+            master_result = read(masters[slide_id], f"{slide_id}-master.json")
+            master_lines = [line for line in texts(master_result)
                             if len(_letters(line)) >= 6 and _cjk_count(line) >= MASTER_LINE_MIN_CJK]
         if invisible_lines(expected, text) or invisible_lines(master_lines, text, min_letters=6):
             with Image.open(image) as picture:
                 large = work_dir / f"{slide_id}-render-2x.png"
                 picture.resize((picture.width * 2, picture.height * 2), Image.LANCZOS).save(large)
-            text += " " + " ".join(read(large, f"{slide_id}-render-2x.json"))
-        missing = invisible_lines(expected, text)
+            text += " " + " ".join(texts(read(large, f"{slide_id}-render-2x.json")))
+
+        def matches_master(line: str) -> bool:
+            """True when the render looks like the master where the master shows ``line``."""
+            if not master_result.get("lines") or not master_result.get("width"):
+                return False
+            target = _letters(_ocr_normalized(line))
+            for candidate in master_result["lines"]:
+                seen = _letters(_ocr_normalized(candidate.get("text", "")))
+                if seen and candidate.get("bbox") and invisible_lines([target], seen) == []:
+                    size = (int(master_result["width"]), int(master_result["height"]))
+                    ratio = ink_ratio(masters[slide_id], image, candidate["bbox"], size)
+                    return ratio is not None and ratio >= MIN_INK_RATIO
+            return False
+
+        missing = [line for line in invisible_lines(expected, text) if not matches_master(line)]
         if missing:
             errors.append(f"{slide_id}: reviewed text is in the deck but not visible in the PowerPoint render "
                           "(covered by a picture or shape, off the slide, or the same colour as the background): "
                           + " | ".join(m[:30] for m in missing[:6]))
-        lost = [line for line in invisible_lines(master_lines, text, min_letters=6) if line not in missing]
+        lost = [line for line in invisible_lines(master_lines, text, min_letters=6)
+                if line not in missing and not matches_master(line)]
         if lost:
             errors.append(f"{slide_id}: text the approved master shows is missing from the native render: "
                           + " | ".join(m[:30] for m in lost[:6]))

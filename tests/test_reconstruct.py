@@ -384,3 +384,36 @@ def test_review_findings_are_never_settled_by_a_worker_recheck(job_at_reconstruc
     assert attempts[0]["attempt"] == 1  # no Worker-only acceptance
     prompts = sorted(job_at_reconstruct["home"].glob("prompt-*.txt"))
     assert finding in prompts[-1].read_text(encoding="utf-8")
+
+
+def test_visible_text_ocr_misreads_is_confirmed_by_ink_and_covered_text_is_not(tmp_path):
+    # Measured 2026-10-18: OCR read a visible white-on-dark title as components (宀 匕 石 开 京); the covered
+    # r3 S07 title kept 5 % of the master's ink, visible native lines 76-107 %.
+    from PIL import ImageDraw
+    from autoppt_service.reconstruct import render_visibility_errors
+
+    def page(path, *, text, shift=0):
+        image = Image.new("RGB", (400, 200), (24, 64, 96))
+        if text:
+            draw = ImageDraw.Draw(image)
+            for k in range(6):
+                draw.rectangle((40 + shift + 22 * k, 40, 52 + shift + 22 * k, 70), fill=(255, 255, 255))
+        image.save(path)
+
+    page(tmp_path / "master.png", text=True)
+    page(tmp_path / "visible.png", text=True, shift=2)
+    page(tmp_path / "covered.png", text=False)
+
+    def ocr(image, out_json):
+        if Path(image).name == "master.png":
+            return {"width": 400, "height": 200,
+                    "lines": [{"text": "研 究 背 景", "bbox": {"x": 40, "y": 40, "w": 130, "h": 30}}]}
+        return {"lines": [{"text": "宀 匕 石 开 京"}]}
+
+    targets = {"S01": ["研究背景"]}
+    masters = {"S01": tmp_path / "master.png"}
+    assert render_visibility_errors({"S01": tmp_path / "visible.png"}, targets, ocr=ocr, masters=masters,
+                                    work_dir=tmp_path / "a") == []
+    errors = render_visibility_errors({"S01": tmp_path / "covered.png"}, targets, ocr=ocr, masters=masters,
+                                      work_dir=tmp_path / "b")
+    assert errors and "研究背景" in errors[0]
