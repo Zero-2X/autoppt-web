@@ -13,7 +13,7 @@
 | CP2 母版 r2 | 通过 | 同上 |
 | CP3 r1、r2 | 撤回（系统） | 新门禁查出整页残留文字、渲染里看不见的标题和数值 |
 | CP3 r3 | 撤回（系统） | Claude 按用户 2026-10-18 授权（“我给你所有权限……你可以自行决策”）做的人工目检：S01 标题背后白色方块、S08 项目符号错位 |
-| 最终 CP3（cp3-native-r4） | **等待用户本人** | CP3 按设计只由用户回复；AGENTS.md 要求交付层级须由用户“看过具体预览后”批准，授权不能代替看预览，所以 Claude 没有代为通过 |
+| 最终 CP3（cp3-native-r4） | 通过 | 用户本人，2026-10-18：“我看过 service/previews/native 里的对比图，接受原生版与母版之间的非文字差异，CP3 通过，请打包交付。”（之前 Claude 没有代为通过：CP3 只由用户回复，授权不能代替看预览。）记录的已看预览是这 9 张对比图 |
 
 人工目检提出的问题不能由 Worker 复查“自动通过”：撤回时的问题会随每次会话发给代理，并且只有新的预览才算处理完。
 
@@ -70,7 +70,9 @@ PowerPoint 渲染每次 7–19 s。
 - 最终文件 `output/native-deck.pptx`（sha256 前 16 位 `205b91ce430b5eb7`）：190 个原生文本框、507 个原生形状、64 张有边界的图片、3 个带工作簿的原生图表。
 - 仍然披露的差异：S07 表格下加了数据条（原生图表）；S08“雷达外推模块”标题字号偏小；S08 母版里的示意柱状图没有数据来源（见上）。
 - 修复前的候选保存在 `workspace/reconstruct/cp3-r5-candidate/`，r4 打不开的文件保存在 `workspace/reconstruct/native-deck-r4-blocked-before-axis-fix.pptx`。
-- 状态：`cp3_native_preview`，等待用户本人看预览（`service/previews/native/Sxx-side-by-side.png`）后回复；通过后才打包。
+- 用户 CP3 通过后打包（6 s）：`output/J-plan-real-001.zip`，含规划简报、逐页简报、证据台账、`native-deck.pptx`、`acceptance.json` 和交付清单；清单里每个文件的哈希与压缩包内容一致；交付的 PPTX 与用户批准的文件逐字节相同。
+- 验收记录：层级 `native-priority-approved`（只限本任务），保存用户原话和 9 张已看预览的哈希；母版来源 `builtin_image_gen`。
+- 全流程合计（`service/usage-summary.json`）：代理输入 4,403 万 token（其中 4,077 万缓存）、输出 34.1 万；代理时间约 5.1 小时；PowerPoint 76 s（含 Claude 手动复查的约 15 s）。
 
 ## 对上架决策的影响
 
