@@ -42,6 +42,14 @@ CHECKPOINT_STATES = {"cp1_outline", "cp2_masters", "cp3_native_preview", "cp_v_t
 FINAL_STATES = {"delivered", "cancelled", "failed", "expired", "deleted"}
 
 
+def _open_files(process: psutil.Process) -> int:
+    """Open regular files, or -1 when Windows refuses the listing (it trips over files deleted a moment ago)."""
+    try:
+        return len(process.open_files())
+    except (psutil.AccessDenied, PermissionError):
+        return -1
+
+
 def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -267,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
         checks.append({"t_min": round((time.monotonic() - started) / 60, 2), "ledger_ok": ledger["ok"],
                        # API, workers and users share this process: a steady rise means a leaked file or socket.
                        "open_handles": process.num_handles() if hasattr(process, "num_handles") else process.num_fds(),
-                       "open_files": len(process.open_files()),
+                       "open_files": _open_files(process),
                        "ledger_issues": ledger["issues"][:5], "alerts": [a["kind"] for a in health["alerts"]],
                        "waiting": health["queue"]["waiting"], "running": health["running_phases"]})
         print(json.dumps(checks[-1] | {"counts": stats.counts}, ensure_ascii=False), flush=True)
