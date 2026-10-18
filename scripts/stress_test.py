@@ -100,14 +100,16 @@ def upload(client: httpx.Client, headers: dict[str, str], data: bytes) -> str:
     return done.json()["sha256"]
 
 
-def user_loop(base: str, email: str, stop: threading.Event, stats: Stats, rng: random.Random, max_open: int) -> None:
+def user_loop(base: str, email: str, stop: threading.Event, stats: Stats, rng: random.Random, max_open: int,
+              delete_share: float = 0.0) -> None:
     try:
-        _user_loop(base, email, stop, stats, rng, max_open)
+        _user_loop(base, email, stop, stats, rng, max_open, delete_share)
     except Exception as exc:  # noqa: BLE001 - a dead simulated user is a failure, not a silent gap
         stats.error(f"{email} stopped: {exc!r}")
 
 
-def _user_loop(base: str, email: str, stop: threading.Event, stats: Stats, rng: random.Random, max_open: int) -> None:
+def _user_loop(base: str, email: str, stop: threading.Event, stats: Stats, rng: random.Random, max_open: int,
+               delete_share: float) -> None:
     with httpx.Client(base_url=base, timeout=60) as client:
         headers = login(client, email)
         sha = upload(client, headers, docx_bytes(rng.randrange(1000)))
@@ -116,6 +118,8 @@ def _user_loop(base: str, email: str, stop: threading.Event, stats: Stats, rng: 
             try:
                 if not stop.is_set() and len(open_jobs) < max_open:
                     tier = rng.choice(TIERS)
+                    if delete_share:  # like the web UI: each order uploads its file (deleting a job deletes its upload)
+                        sha = upload(client, headers, docx_bytes(rng.randrange(1000)))
                     job = client.post("/api/jobs", json={"request": request_body(sha, tier)}, headers=headers).json()
                     total = client.post(f"/api/jobs/{job['id']}/estimate", headers=headers).json()["total"]
                     reply = client.post(f"/api/jobs/{job['id']}/submit", json={"confirm_total": total},
@@ -136,6 +140,9 @@ def _user_loop(base: str, email: str, stop: threading.Event, stats: Stats, rng: 
                             with stats.lock:
                                 stats.durations.append(time.monotonic() - open_jobs[job_id])
                         del open_jobs[job_id]
+                        if rng.random() < delete_share:  # users delete finished jobs; keeps long runs within the disk
+                            gone = client.delete(f"/api/jobs/{job_id}", headers=headers)
+                            stats.add("deleted" if gone.status_code == 200 else f"delete_{gone.status_code}")
                     elif state in CHECKPOINT_STATES:
                         answer(client, headers, job_id, stats, rng)
                     elif state == "blocked":
@@ -199,6 +206,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--database-url")
     parser.add_argument("--work-dir", type=Path)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--delete-share", type=float, default=0.0,
+                        help="share of finished jobs the users delete (use ~0.9 for multi-hour runs: storage grows ~1.7 GB/h)")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
 
@@ -243,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         admin_client.post("/api/admin/credits/adjust", json={"email": email, "credits": 1_000_000, "memo": "stress"},
                           headers={**admin, "Idempotency-Key": f"stress-{index}"}).raise_for_status()
         thread = threading.Thread(target=user_loop, args=(base, email, stop_users, stats, random.Random(rng.random()),
-                                                          args.max_open), daemon=True)
+                                                          args.max_open, args.delete_share), daemon=True)
         thread.start()
         users.append(thread)
 

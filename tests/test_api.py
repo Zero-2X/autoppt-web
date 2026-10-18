@@ -532,3 +532,20 @@ def test_style_previews_say_whether_they_are_real_or_schematic(api):
     assert styles["academic_light"]["sample_kind"] == "imagegen"  # a real master of the fictional thesis
     assert {s["sample_kind"] for sid, s in styles.items() if sid != "academic_light"} == {"schematic"}
     assert api.get("/styles/deep_academic.jpg").headers["content-type"] == "image/jpeg"
+
+
+def test_deleting_a_job_keeps_the_upload_of_an_open_draft(api, world):
+    # Found by the soak test (2026-10-19): JobFile rows appear only at submit, so a draft's file was deleted
+    # together with another job that used the same upload.
+    user = world["user"]
+    sha = upload(api, user, "共用.docx", docx_bytes() + b" shared")
+    done = submit(api, world | {"sha": sha}, "image_deck")
+    api.post(f"/api/jobs/{done['id']}/cancel", headers=user)
+    draft = api.post("/api/jobs", json={"request": request_body(sha, "image_deck")}, headers=user).json()
+    total = api.post(f"/api/jobs/{draft['id']}/estimate", headers=user).json()["total"]
+    assert api.delete(f"/api/jobs/{done['id']}", headers=user).json()["deleted"] is True
+    reply = api.post(f"/api/jobs/{draft['id']}/submit", json={"confirm_total": total}, headers={**user, "Idempotency-Key": "d2"})
+    assert reply.status_code == 200, reply.text
+    # Once nothing refers to the upload any more, deleting the last job removes it.
+    api.post(f"/api/jobs/{draft['id']}/cancel", headers=user)
+    assert api.delete(f"/api/jobs/{draft['id']}", headers=user).json()["removed_blobs"] >= 1

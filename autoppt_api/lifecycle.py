@@ -37,11 +37,18 @@ def delete_job_data(session: Session, storage: LocalStorage, job: Job, *, actor_
     for checkpoint in session.scalars(select(Checkpoint).where(Checkpoint.job_id == job.id)):
         checkpoint.payload, checkpoint.response = {"deleted": True}, None
     # The user's own uploads for this job go too, unless another of their jobs still uses them.
+    # Drafts and estimated orders name their files only in the request (JobFile rows appear at submit): found
+    # 2026-10-19 by the soak test, deleting one job removed the upload under the same user's open draft.
+    drafted = {str(entry.get("sha256") or "").lower()
+               for other in session.scalars(select(Job).where(Job.user_id == job.user_id, Job.id != job.id,
+                                                              Job.state.in_(("draft", "estimated"))))
+               for entry in ((other.request or {}).get("inputs") or {}).get("files") or []}
     for upload in session.scalars(select(UploadSession).where(UploadSession.user_id == job.user_id, UploadSession.sha256.in_(hashes))):
         still_used = session.scalars(
-            select(JobFile.id).join(Job, Job.id == JobFile.job_id).where(JobFile.sha256 == upload.sha256, Job.user_id == job.user_id)
+            select(JobFile.id).join(Job, Job.id == JobFile.job_id).where(JobFile.sha256 == upload.sha256, Job.user_id == job.user_id,
+                                                                         Job.id != job.id)
         ).first()
-        if still_used is None:
+        if still_used is None and upload.sha256 not in drafted:
             upload.status = "deleted"
     session.flush()
     removed = 0
