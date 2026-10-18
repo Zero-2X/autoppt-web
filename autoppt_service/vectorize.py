@@ -262,6 +262,22 @@ def join_cjk(text: str) -> str:
     return _CJK_GAP.sub("", " ".join(str(text).split()))
 
 
+# Windows OCR sometimes reads one character as its two components (measured: 涝 -> 氵劳, 外 -> 夕卜).
+# Known pairs become suggestions at CP-V; a lone radical marks the line for attention.  Nothing is changed
+# automatically: the reviewed text is the user's.
+OCR_SPLITS = {"氵劳": "涝", "夕卜": "外", "亻尔": "你", "讠吾": "语", "扌是": "提", "钅失": "铁", "纟充": "统"}
+_LONE_RADICALS = set("氵亻扌讠钅纟彳忄阝冫冖宀犭礻衤饣")
+
+
+def ocr_suggestion(text: str) -> tuple[str | None, bool]:
+    """``(suggested_text, suspect)`` for a recognised line."""
+    suggested = text
+    for split, joined in OCR_SPLITS.items():
+        suggested = suggested.replace(split, joined)
+    suspect = suggested != text or any(ch in _LONE_RADICALS for ch in suggested)
+    return (suggested if suggested != text else None), suspect
+
+
 def run_ocr(job_dir: Path, masters: dict[str, Any], *, ocr: OcrRunner = windows_ocr) -> dict[str, Any]:
     """OCR every master; write the editable text-review document for CP-V."""
     job_dir = Path(job_dir)
@@ -280,6 +296,12 @@ def run_ocr(job_dir: Path, masters: dict[str, Any], *, ocr: OcrRunner = windows_
             for index, line in enumerate(result.get("lines", []))
             if str(line.get("text", "")).strip()
         ]
+        for line in lines:
+            suggestion, suspect = ocr_suggestion(line["text"])
+            if suspect:
+                line["suspect"] = True
+                if suggestion:
+                    line["suggestion"] = suggestion
         review["slides"].append({"slide_id": slide["slide_id"], "master": slide["path"], "lines": lines})
     write_json_atomic(job_dir / WORK_DIR / "text-review.json", review)
     return review

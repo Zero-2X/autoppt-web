@@ -650,10 +650,17 @@ async function textReview(cp, send) {
     images[slide.slide_id] ? h("img", { src: images[slide.slide_id], alt: slide.slide_id, loading: "lazy" }) : null,
     h("div", { class: "stack" },
       h("strong", {}, slide.slide_id),
-      slide.lines.map((line) => h("input", {
-        value: line.text, "aria-label": `${slide.slide_id} ${line.line_id}`,
-        oninput: (e) => { (corrections[slide.slide_id] = corrections[slide.slide_id] || {})[line.line_id] = e.target.value; },
-      })),
+      slide.lines.map((line) => {
+        const record = (value) => { (corrections[slide.slide_id] = corrections[slide.slide_id] || {})[line.line_id] = value; };
+        const input = h("input", {
+          value: line.text, "aria-label": `${slide.slide_id} ${line.line_id}`, class: line.suspect ? "suspect" : "",
+          oninput: (e) => record(e.target.value),
+        });
+        // OCR sometimes splits one character into its components (涝 -> 氵劳); offer the fix, never apply it silently.
+        const hint = line.suggestion ? h("button", { class: "link", type: "button", onclick: () => { input.value = line.suggestion; record(line.suggestion); } },
+          `采用建议：${line.suggestion}`) : line.suspect ? h("small", { class: "hint" }, "这一行可能识别有误，请核对") : null;
+        return h("div", { class: "stack tight" }, input, hint);
+      }),
       h("textarea", { rows: 2, placeholder: "识别漏掉的文字（每行一条，可选）",
         oninput: (e) => { added[slide.slide_id] = e.target.value.split("\n").map((s) => s.trim()).filter(Boolean); } }),
       h("small", { class: "muted" }, "清空一行即删除该行。"))));

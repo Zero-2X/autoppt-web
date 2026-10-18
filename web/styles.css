@@ -115,6 +115,8 @@ td.pos { color: var(--teal); }
 .compare figcaption { color: var(--muted); font-size: .85rem; }
 .downloads li { margin: 4px 0; }
 .text-review { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.text-review input.suspect { border-color: #d99a1c; background: var(--warn-bg); }
+.stack.tight { gap: 2px; }
 .text-review img { width: 100%; border: 1px solid var(--line); border-radius: 6px; }
 .codes { background: #0f1b2a; color: #e8eef6; padding: 12px; border-radius: 8px; white-space: pre-wrap; min-height: 1em; }
 .tabs { display: flex; gap: 14px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 8px; }

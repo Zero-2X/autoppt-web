@@ -225,3 +225,20 @@ def test_master_number_check_flags_derived_figures(tmp_path):
     findings = check_master_numbers(job, {"S09": job / "assets/slides/S09.png"}, ocr=ocr)
     assert findings == ["S09: master shows numbers not in the plan or evidence: 2.6"]
     assert read_json(job / "workspace/master-qa/numbers.json")["slides"][0]["unexpected"] == ["2.6"]
+
+
+def test_ocr_component_splits_are_suggested_not_applied(tmp_path):
+    job = tmp_path / "job"
+    (job / "assets/slides").mkdir(parents=True)
+    Image.new("RGB", (1920, 1080)).save(job / "assets/slides/S01.png")
+    masters = {"slides": [{"slide_id": "S01", "path": "assets/slides/S01.png", "width": 1920, "height": 1080, "sha256": "x"}]}
+
+    def ocr(image, out_json):  # what Windows OCR returned for 城市内涝频发 / 雷达外推 on the real sample
+        return {"width": 1920, "height": 1080, "lines": [
+            {"id": "l0", "text": "城 市 内 氵 劳 频 发", "bbox": {"x": 0, "y": 0, "w": 10, "h": 10}},
+            {"id": "l1", "text": "雷 达 夕 卜 推", "bbox": {"x": 0, "y": 0, "w": 10, "h": 10}},
+            {"id": "l2", "text": "研 究 背 景", "bbox": {"x": 0, "y": 0, "w": 10, "h": 10}}]}
+
+    lines = vectorize.run_ocr(job, masters, ocr=ocr)["slides"][0]["lines"]
+    assert [(l["text"], l.get("suggestion"), l.get("suspect", False)) for l in lines] == [
+        ("城市内氵劳频发", "城市内涝频发", True), ("雷达夕卜推", "雷达外推", True), ("研究背景", None, False)]
