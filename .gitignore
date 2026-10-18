@@ -14,3 +14,5 @@ profiles.json
 *.jpg
 *.jpeg
 *.webp
+# Public case-study images (fictional test sample) are part of the front end.
+!web/cases/**/*.jpg

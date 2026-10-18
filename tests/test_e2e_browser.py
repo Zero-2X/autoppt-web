@@ -178,6 +178,13 @@ def test_english_interface_shows_no_chinese(live):
         page.goto(f"{live['base']}/#/")
         page.get_by_text("Delivery tiers").wait_for()
         assert visible_chinese() == []
+        page.goto(f"{live['base']}/#/cases")
+        page.get_by_text("Differences disclosed").wait_for()
+        assert visible_chinese() == []
+        assert page.locator("main img").count() == 4
+        for src in page.locator("main img").evaluate_all("(imgs) => imgs.map((img) => img.src)"):  # lazy: not loaded yet
+            reply = httpx.get(src)
+            assert reply.status_code == 200 and reply.headers["content-type"] == "image/jpeg", src
         page.goto(f"{live['base']}/#/login")
         page.get_by_label("Email or phone").fill("student@example.com")
         page.get_by_role("button", name="Send code").click()

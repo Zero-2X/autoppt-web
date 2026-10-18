@@ -104,7 +104,7 @@ async function renderNav() {
   if (auth.loggedIn() && !me) {
     try { me = await api.get("/api/me"); } catch { me = null; }
   }
-  const links = [["#/", t("home")], ["#/pricing", t("pricing")]];
+  const links = [["#/", t("home")], ["#/cases", tr("案例", "Case study")], ["#/pricing", t("pricing")]];
   if (auth.loggedIn()) {
     links.push(["#/new", t("newJob")], ["#/jobs", t("myJobs")], ["#/credits", t("credits")]);
     if (me && me.is_admin) links.push(["#/admin", t("admin")]);
@@ -127,7 +127,8 @@ async function renderNav() {
 const ROUTES = [
   [/^#?\/?$/, pageHome],
   [/^#\/pricing$/, pagePricing],
-  [/^#\/login$/, pageLogin],
+  [/^#\/cases$/, pageCases],
+  [/^#\/login(?:\?.*)?$/, pageLogin],
   [/^#\/new$/, pageNewJob],
   [/^#\/jobs$/, pageJobs],
   [/^#\/jobs\/([0-9a-f]{32})$/, pageJob],
@@ -144,7 +145,7 @@ async function route() {
   for (const [pattern, page] of ROUTES) {
     const match = hash.match(pattern);
     if (!match) continue;
-    const needsLogin = ![pageHome, pagePricing, pageLogin].includes(page);
+    const needsLogin = ![pageHome, pagePricing, pageCases, pageLogin].includes(page);
     if (needsLogin && !auth.loggedIn()) { location.hash = "#/login"; return; }
     fill(view(), h("p", { class: "muted" }, t("loading")));
     try {
@@ -163,6 +164,51 @@ let pollTimer = null;
 function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 
 // ---------------------------------------------------------------- public pages
+
+// The 2026-10-17/18 end-to-end run on a fictional thesis made for testing (content and data invented,
+// no third-party rights); figures from docs/p1-real-run-masters-reconstruct.md.
+const CASE_SLIDES = [
+  { file: "S05-side-by-side.jpg",
+    zh: "S05 方法：三步流程图重建为原生文本框和形状，示意图保留为有边界的图片。",
+    en: "S05 method: the three-step diagram rebuilt as native text boxes and shapes; illustrations stay bounded pictures." },
+  { file: "S07-side-by-side.jpg",
+    zh: "S07 结果：表格数字来自论文表 1，并配了带工作簿的原生图表（表格下的数据条，作为差异披露）。",
+    en: "S07 results: the numbers come from the thesis’s table 1, with native charts that carry their workbook (the bars under the table are a disclosed difference)." },
+  { file: "S08-side-by-side.jpg",
+    zh: "S08 本人贡献：母版里的“不同模型设置的预警效果对比”柱状图是 ImageGen 画的示意，资料里没有数据。现在母版审核会把这类无数据来源的图表单独报出来。",
+    en: "S08 contribution: the master’s ablation bar chart was drawn by ImageGen with no data in the sources. Master review now flags charts like this one." },
+];
+
+async function pageCases() {
+  const base = "/cases/j-plan-real-001/";
+  const facts = lang() === "en" ? [
+    ["Source", "a 9-slide master’s defense from one DOCX (fictional test thesis)"],
+    ["Reviews", "outline approved; masters: S09 redone (it showed an invented “2.6×”); native preview approved by the user after 5 rebuild rounds"],
+    ["Delivered deck", "190 native text boxes, 507 native shapes, 64 bounded pictures, 3 native charts with workbooks"],
+    ["Effort", "about 5.1 h of agent time and 44 M input tokens (93% cached) end to end"],
+  ] : [
+    ["资料", "一份 DOCX 论文（虚构的测试论文），9 页硕士答辩"],
+    ["审核", "大纲通过；母版重做 S09（出现资料没有的“提升 2.6 倍”）；原生重建 5 轮后由用户本人批准原生预览"],
+    ["交付", "190 个原生文本框、507 个原生形状、64 张有边界的图片、3 个带工作簿的原生图表"],
+    ["投入", "全流程代理约 5.1 小时、输入 4,400 万 token（93% 为缓存）"],
+  ];
+  return h("div", { class: "stack" },
+    card(tr("案例：城市内涝预警硕士答辩（测试样例）", "Case: a master’s defense on flood warning (test sample)"),
+      notice(tr("这是为联调准备的虚构论文，内容和数据均为虚构；展示的是流程和交付物的真实样子，不是质量承诺。",
+        "A fictional thesis made for testing; its content and data are invented. It shows what the process and the deliverables really look like, not a quality promise."), "info"),
+      h("table", { class: "table" }, h("tbody", {}, facts.map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v))))),
+      h("img", { class: "contact", src: `${base}contact-sheet.jpg`, alt: tr("9 页原生版联系表", "Contact sheet of the 9 native slides"), loading: "lazy" })),
+    card(tr("母版（左）与原生可编辑版（右）", "Master (left) and native editable slide (right)"),
+      CASE_SLIDES.map((slide) => h("figure", { class: "compare" },
+        h("img", { src: base + slide.file, alt: slide.file.slice(0, 3), loading: "lazy" }),
+        h("figcaption", {}, tr(slide.zh, slide.en))))),
+    card(tr("如实披露的差异", "Differences disclosed"),
+      h("ul", {},
+        h("li", {}, tr("字体由母版字形换成微软雅黑，局部图形有差异；用户看过逐页对比图后接受。", "Lettering becomes Microsoft YaHei and some graphics differ; the user accepted after looking at every comparison.")),
+        h("li", {}, tr("S08 的示意柱状图没有数据来源（见上）。", "S08’s illustrative bar chart has no source data (see above).")),
+        h("li", {}, tr("S08“雷达外推模块”标题字号比母版略小。", "S08’s “radar extrapolation” heading is slightly smaller than in the master.")))),
+  );
+}
 
 async function pageHome() {
   const opts = await getOptions();
