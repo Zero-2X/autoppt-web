@@ -529,6 +529,11 @@ def _real_reconstruct(
     # Only the user's own words are passed as user feedback; a withdrawn preview passes its audit errors.
     revision = previous if previous and previous["decision"] == "revise" and previous.get("responder") == "user" else None
     initial_issues = previous.get("audit_errors", []) if previous and previous["decision"] == "withdrawn" else []
+    carried = service_path(job_dir, "reconstruct-issues.json")
+    if carried.exists():
+        # A blocked reconstruction that was resumed continues from its latest audit, not older errors.
+        initial_issues = read_json(carried).get("issues", [])
+        carried.unlink()
     with phase_timer(job_dir, "reconstruct", round=round_no):
         try:
             report = run_reconstruct_agent(
@@ -542,6 +547,7 @@ def _real_reconstruct(
             return {"phase": "reconstruct", "job_state": state["state"], "deferred": True,
                     "reason": exc.message, "retry_after": exc.retry_after}
         except ReconstructBlocked as exc:
+            write_json_atomic(carried, {"issues": exc.issues, "at": utc_now()})
             state = transition(state, "blocked", reason="reconstruct: " + "; ".join(exc.issues)[:980])
             save_job_state(job_dir, state)
             return {"phase": "reconstruct", "job_state": state["state"], "issues": exc.issues}

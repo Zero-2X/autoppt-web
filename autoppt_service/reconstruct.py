@@ -166,7 +166,8 @@ def audit_pptx(
             stale = stale_lines(targets[slide_id], join_cjk(" ".join(picture_text)))
             if stale:
                 errors.append(f"{slide_id}: the background picture still shows the old text under the native text "
-                              "(remove it from the picture): " + " | ".join(s[:30] for s in stale[:6]))
+                              "(remove it from the picture; any other lettering the master shows must also be removed "
+                              "from the picture or rebuilt as native text): " + " | ".join(s[:30] for s in stale[:6]))
         odd_fonts = sorted(f for f in fonts if f not in OFFICE_FONTS and not f.startswith("+"))
         if odd_fonts:
             warnings.append(f"{slide_id}: fonts outside the accepted Office families: {', '.join(odd_fonts)}")
