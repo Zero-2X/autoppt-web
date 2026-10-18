@@ -108,15 +108,26 @@ def invisible_lines(lines: Sequence[str], render_text: str, *, min_letters: int 
     return missing
 
 
+MASTER_LINE_MIN_CJK = 6  # shorter master OCR lines are mostly chart legends and axis labels run together
+
+
+def _cjk_count(text: str) -> int:
+    return sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+
+
 def render_visibility_errors(
     renders: dict[str, Path], targets: dict[str, list[str]], *, ocr: Callable[[Path, Path], dict[str, Any]], work_dir: Path,
     masters: dict[str, Path] | None = None,
 ) -> list[str]:
     """Measured on the first real deck: titles and values present in the PPTX but invisible in PowerPoint.
 
-    Checks the reviewed text, and every line OCR reads clearly on the approved master (titles the
-    master shows must survive even when the plan worded them differently).
+    Checks the reviewed text, and every longer line OCR reads on the approved master (titles the master
+    shows must survive even when the plan worded them differently).  A line that looks missing is read
+    again on a 2x upscaled render first: measured 2026-10-18, Windows OCR skipped small but clearly
+    visible 12-14 px lines that the upscaled render reads.
     """
+    from PIL import Image
+
     from autoppt_service.vectorize import join_cjk
 
     def read(image: Path, name: str) -> list[str]:
@@ -127,17 +138,25 @@ def render_visibility_errors(
     work_dir.mkdir(parents=True, exist_ok=True)
     for slide_id, image in sorted(renders.items()):
         text = " ".join(read(image, f"{slide_id}-render.json"))
-        missing = invisible_lines(targets.get(slide_id, []), text)
+        expected = list(targets.get(slide_id, []))
+        master_lines: list[str] = []
+        if masters and slide_id in masters:
+            master_lines = [line for line in read(masters[slide_id], f"{slide_id}-master.json")
+                            if len(_letters(line)) >= 6 and _cjk_count(line) >= MASTER_LINE_MIN_CJK]
+        if invisible_lines(expected, text) or invisible_lines(master_lines, text, min_letters=6):
+            with Image.open(image) as picture:
+                large = work_dir / f"{slide_id}-render-2x.png"
+                picture.resize((picture.width * 2, picture.height * 2), Image.LANCZOS).save(large)
+            text += " " + " ".join(read(large, f"{slide_id}-render-2x.json"))
+        missing = invisible_lines(expected, text)
         if missing:
             errors.append(f"{slide_id}: reviewed text is in the deck but not visible in the PowerPoint render "
                           "(covered by a picture or shape, off the slide, or the same colour as the background): "
                           + " | ".join(m[:30] for m in missing[:6]))
-        if masters and slide_id in masters:
-            master_lines = [line for line in read(masters[slide_id], f"{slide_id}-master.json") if len(_letters(line)) >= 6]
-            lost = [line for line in invisible_lines(master_lines, text, min_letters=6) if line not in missing]
-            if lost:
-                errors.append(f"{slide_id}: text the approved master shows is missing from the native render: "
-                              + " | ".join(m[:30] for m in lost[:6]))
+        lost = [line for line in invisible_lines(master_lines, text, min_letters=6) if line not in missing]
+        if lost:
+            errors.append(f"{slide_id}: text the approved master shows is missing from the native render: "
+                          + " | ".join(m[:30] for m in lost[:6]))
     return errors
 
 
@@ -240,6 +259,66 @@ def audit_pptx(
     return errors, warnings, scope
 
 
+INT32_MAX = 2**31 - 1
+_AXIS_ID = re.compile(r'(<c:(?:axId|crossAx) val=")(-?\d+)(")')
+
+
+def normalize_chart_axis_ids(pptx: Path) -> list[str]:
+    """Renumber chart axis ids PowerPoint cannot read; returns the repaired chart parts.
+
+    Measured 2026-10-18: the schema allows unsigned ids, but PowerPoint refuses to open a deck whose
+    chart uses an axis id above 2147483647 ("PowerPoint could not open the file").  Renumbering the
+    ids consistently inside each chart changes nothing the user can see or edit.
+    """
+    import zipfile
+
+    pptx = Path(pptx)
+    with zipfile.ZipFile(pptx) as package:
+        items = [(info, package.read(info.filename)) for info in package.infolist()]
+    repaired: list[str] = []
+    out: list[tuple[Any, bytes]] = []
+    for info, data in items:
+        if re.match(r"ppt/charts/[^/]+\.xml$", info.filename):
+            text = data.decode("utf-8")
+            ids = [int(m.group(2)) for m in _AXIS_ID.finditer(text)]
+            if any(not -INT32_MAX - 1 <= value <= INT32_MAX for value in ids):
+                mapping = {value: 100001 + k for k, value in enumerate(dict.fromkeys(ids))}
+                text = _AXIS_ID.sub(lambda m: f"{m.group(1)}{mapping[int(m.group(2))]}{m.group(3)}", text)
+                data = text.encode("utf-8")
+                repaired.append(info.filename)
+        out.append((info, data))
+    if repaired:
+        temp = pptx.with_suffix(".normalizing.pptx")
+        with zipfile.ZipFile(temp, "w", zipfile.ZIP_DEFLATED) as package:
+            for info, data in out:
+                package.writestr(info, data)
+        temp.replace(pptx)
+    return repaired
+
+
+def locate_unopenable_slides(pptx: Path, renderer: Renderer, slide_ids: Sequence[str], work_dir: Path) -> list[str]:
+    """Slides PowerPoint cannot open on their own (each slide is tried in a copy without the others)."""
+    from pptx import Presentation
+
+    failing = []
+    for keep, slide_id in enumerate(slide_ids):
+        deck = Presentation(str(pptx))
+        listing = deck.slides._sldIdLst
+        for index, entry in reversed(list(enumerate(list(listing)))):
+            if index != keep:
+                deck.part.drop_rel(entry.rId)
+                listing.remove(entry)
+        folder = Path(work_dir) / slide_id
+        shutil.rmtree(folder, ignore_errors=True)
+        folder.mkdir(parents=True)
+        deck.save(folder / "single.pptx")
+        try:
+            renderer(folder / "single.pptx", folder / "render")
+        except Exception:  # noqa: BLE001 - a failure is the measurement
+            failing.append(slide_id)
+    return failing
+
+
 def render_with_office(job_dir: Path, renderer: Renderer, slide_ids: Sequence[str]) -> dict[str, Path]:
     """PowerPoint renders of the delivered deck, named like the masters."""
     job_dir = Path(job_dir)
@@ -294,6 +373,7 @@ def run_reconstruct_agent(
     reasoning_effort: str | None = None,
     ocr: Callable[[Path, Path], dict[str, Any]] | None = None,
     initial_issues: Sequence[str] = (),
+    recheck_existing: bool = False,
 ) -> dict[str, Any]:
     budgets = {**DEFAULT_BUDGETS, **(budgets or {})}
     if ocr is None and __import__("os").name == "nt":
@@ -314,10 +394,73 @@ def run_reconstruct_agent(
     issues: list[str] = list(initial_issues)  # e.g. the audit errors of a withdrawn preview
     attempts: list[dict[str, Any]] = []
     retry_hint: str | None = None
+
+    def check_deck(outcome: dict[str, Any]) -> tuple[list[str], Any]:
+        """The Worker's audit of the current deck: ``(issues, (renders, warnings, scope) or None)``."""
+        if not (job_dir / DECK).is_file():
+            return [f"{DECK} was not written"], None
+        repaired = normalize_chart_axis_ids(job_dir / DECK)
+        if repaired:
+            outcome["worker_repairs"] = [f"renumbered chart axis ids above 2147483647 in {part}" for part in repaired]
+        errors, warnings, scope = audit_pptx(job_dir / DECK, targets, slide_ids=slide_ids, require_chart=require_chart,
+                                             ocr=ocr, work_dir=job_dir / "workspace" / "reconstruct")
+        outcome["errors"] = errors
+        if errors:
+            return errors, None
+        try:
+            renders = render_with_office(job_dir, renderer, slide_ids)
+        except Exception as exc:  # noqa: BLE001 - PowerPoint failing to open the deck is an audit failure
+            # The agent cannot run PowerPoint; a bare "could not open" sent round 4 into blind package repairs.
+            try:
+                failing = locate_unopenable_slides(job_dir / DECK, renderer, slide_ids,
+                                                   job_dir / "workspace" / "reconstruct" / "open-check")
+            except Exception:  # noqa: BLE001
+                failing = []
+            where = (f" PowerPoint opens every other slide on its own; it cannot open {', '.join(failing)}. Compare "
+                     "those slides' parts (charts, media, relationships) with a slide that opens." if failing else "")
+            outcome["errors"] = [f"PowerPoint could not open {DECK}.{where} Error: {str(exc)[-300:]}"]
+            return outcome["errors"], None
+        if len(renders) != len(slide_ids):
+            outcome["errors"] = [f"PowerPoint rendered {len(renders)} slides, expected {len(slide_ids)}"]
+            return outcome["errors"], None
+        if ocr is not None:
+            masters = {sid: job_dir / MASTERS_DIR / f"{sid}.png" for sid in slide_ids}
+            hidden = render_visibility_errors(renders, targets, ocr=ocr, masters=masters,
+                                              work_dir=job_dir / "workspace" / "reconstruct" / "render-ocr")
+            if hidden:
+                outcome["errors"] = hidden
+                # The agent cannot run PowerPoint; point it at the Worker's renders so it can see the problem.
+                return hidden + [f"The Worker's PowerPoint renders of your deck are in {RENDER_DIR}/Sxx.png; open each "
+                                 "failing slide's render next to assets/slides/Sxx.png and fix what differs."], None
+        return [], (renders, warnings, scope)
+
+    def accept(accepted: tuple[Any, Any, Any]) -> dict[str, Any]:
+        renders, warnings, scope = accepted
+        agent_report = read_json(job_dir / REPORT) or {}
+        report = {
+            "schema_version": "autoppt-reconstruct-report-v1",
+            "generated_at": utc_now(),
+            "round": round_no,
+            "attempts": attempts,
+            "warnings": warnings,
+            "editability_scope": scope,
+            "agent_report": {k: agent_report.get(k) for k in ("route", "slides", "disclosures", "learning_context") if k in agent_report},
+        }
+        write_json_atomic(service_path(job_dir, "reconstruct-report.json"), report)
+        return {**report, "renders": {sid: str(path) for sid, path in renders.items()}}
+
+    if recheck_existing and (job_dir / DECK).is_file():
+        # Attempt 0: a resumed job whose remaining problem the Worker fixes itself costs no agent session.
+        outcome: dict[str, Any] = {"attempt": 0, "profile": None, "thread_id": None, "ok": True, "worker_recheck": True}
+        attempts.append(outcome)
+        found, accepted = check_deck(outcome)
+        if accepted is not None:
+            return accept(accepted)
+        issues = found
     for attempt in range(1, budgets["reconstruct_attempts"] + 1):
         profile = pool.acquire()
         if profile is None:
-            raise ReconstructDeferred("every Codex profile is at its usage limit", retry_hint)
+            raise ReconstructDeferred("every Codex profile is at its usage limit", retry_hint, issues)
         write_job_agents(job_dir, template, job_id=job_id, budgets=budgets)
         service_path(job_dir, "status.json").unlink(missing_ok=True)
         result = run_codex_exec(
@@ -332,61 +475,26 @@ def run_reconstruct_agent(
         )
         record_agent_turn(job_dir, "reconstruct", result, rollout=find_rollout(profile, result.thread_id),
                           round=round_no, attempt=attempt)
-        outcome: dict[str, Any] = {"attempt": attempt, "profile": profile.name, "thread_id": result.thread_id, "ok": result.ok}
+        outcome = {"attempt": attempt, "profile": profile.name, "thread_id": result.thread_id, "ok": result.ok}
         attempts.append(outcome)
         status = read_json(service_path(job_dir, "status.json")) or {}
         if result.rate_limited:
             pool.rest(profile)
             retry_hint = usage_limit_retry_hint(result.errors) or retry_hint
             outcome["usage_limited"] = True
-            issues = []
+            # Measured 2026-10-18: clearing the issues here lost the last audit finding; the deck is unchanged
+            # or half-edited, so the next session still has to fix the same problems.
             continue
         if status.get("state") == "blocked":
             raise ReconstructBlocked([f"agent blocked: {status.get('blocked_reason', 'no reason given')}"])
         if not result.ok:
-            issues = [f"the previous session failed: {'; '.join(result.errors) or 'non-zero exit'}"]
+            # Keep the open audit findings: measured 2026-10-18, a failed session replaced them with its error.
+            failure = f"the previous session failed: {'; '.join(result.errors)[:600] or 'non-zero exit'}"
+            issues = [issue for issue in issues if not issue.startswith("the previous session failed")] + [failure]
             continue
-        if not (job_dir / DECK).is_file():
-            issues = [f"{DECK} was not written"]
-            continue
-        errors, warnings, scope = audit_pptx(job_dir / DECK, targets, slide_ids=slide_ids, require_chart=require_chart,
-                                             ocr=ocr, work_dir=job_dir / "workspace" / "reconstruct")
-        outcome["errors"] = errors
-        if errors:
-            issues = errors
-            continue
-        try:
-            renders = render_with_office(job_dir, renderer, slide_ids)
-        except Exception as exc:  # noqa: BLE001 - PowerPoint failing to open the deck is an audit failure
-            issues = [f"PowerPoint could not render {DECK}: {exc}"]
-            outcome["errors"] = issues
-            continue
-        if len(renders) != len(slide_ids):
-            issues = [f"PowerPoint rendered {len(renders)} slides, expected {len(slide_ids)}"]
-            outcome["errors"] = issues
-            continue
-        if ocr is not None:
-            masters = {sid: job_dir / MASTERS_DIR / f"{sid}.png" for sid in slide_ids}
-            hidden = render_visibility_errors(renders, targets, ocr=ocr, masters=masters,
-                                              work_dir=job_dir / "workspace" / "reconstruct" / "render-ocr")
-            if hidden:
-                # The agent cannot run PowerPoint; point it at the Worker's renders so it can see the problem.
-                issues = hidden + [f"The Worker's PowerPoint renders of your deck are in {RENDER_DIR}/Sxx.png; open each "
-                                   "failing slide's render next to assets/slides/Sxx.png and fix what differs."]
-                outcome["errors"] = hidden
-                continue
-        agent_report = read_json(job_dir / REPORT) or {}
-        report = {
-            "schema_version": "autoppt-reconstruct-report-v1",
-            "generated_at": utc_now(),
-            "round": round_no,
-            "attempts": attempts,
-            "warnings": warnings,
-            "editability_scope": scope,
-            "agent_report": {k: agent_report.get(k) for k in ("route", "slides", "disclosures", "learning_context") if k in agent_report},
-        }
-        write_json_atomic(service_path(job_dir, "reconstruct-report.json"), report)
-        return {**report, "renders": {sid: str(path) for sid, path in renders.items()}}
-    if attempts and all(item.get("usage_limited") for item in attempts):
-        raise ReconstructDeferred("every reconstruction session stopped at a Codex usage limit", retry_hint)
+        issues, accepted = check_deck(outcome)
+        if accepted is not None:
+            return accept(accepted)
+    if attempts and attempts[-1].get("usage_limited"):
+        raise ReconstructDeferred("the last reconstruction session stopped at a Codex usage limit", retry_hint, issues)
     raise ReconstructBlocked(issues or ["reconstruction did not produce an acceptable deck"])

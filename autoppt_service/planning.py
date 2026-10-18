@@ -105,9 +105,10 @@ class PlanningBlocked(RuntimeError):
 class PlanningDeferred(RuntimeError):
     """Every Codex profile is at its usage limit; run the phase again after ``retry_after``."""
 
-    def __init__(self, message: str, retry_after: str | None) -> None:
+    def __init__(self, message: str, retry_after: str | None, issues: list[str] | None = None) -> None:
         self.message = message
         self.retry_after = retry_after
+        self.issues = list(issues or [])  # unresolved audit issues the next run must still fix
         super().__init__(message)
 
 

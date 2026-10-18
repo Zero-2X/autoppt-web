@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -30,6 +31,10 @@ counter.write_text(str(calls))
 (home / f"prompt-{calls}.txt").write_text(prompt, encoding="utf-8")
 mode = os.environ.get("FAKE_BUILD_MODE", "ok")
 print(json.dumps({"type": "thread.started", "thread_id": str(uuid.uuid4())}))
+if mode == "missing_then_limit" and calls >= 2:
+    print(json.dumps({"type": "error", "message": "You've hit your usage limit. Try again at 3:13 PM."}))
+    print(json.dumps({"type": "turn.failed", "error": {"message": "usage limit"}}))
+    sys.exit(1)
 job = Path.cwd()
 plan = json.loads((job / "workspace/presentation_handoff/deck-plan.json").read_text(encoding="utf-8"))
 deck = Presentation()
@@ -40,7 +45,7 @@ for slide in plan["slides"]:
         page.shapes.add_picture(str(job / "assets/slides" / f"{slide['slide_id']}.png"), 0, 0, deck.slide_width, deck.slide_height)
         continue
     lines = list(slide["exact_text"])
-    if mode == "missing_then_ok" and "is not native text" not in prompt and slide["slide_id"] == "S02":
+    if mode in ("missing_then_ok", "missing_then_limit") and "is not native text" not in prompt and slide["slide_id"] == "S02":
         lines = lines[:-1]
     for index, line in enumerate(lines):
         box = page.shapes.add_textbox(Inches(0.6), Inches(0.5 + 0.8 * index), Inches(12), Inches(0.7))
@@ -266,3 +271,99 @@ def test_render_visibility_finds_covered_and_lost_text(tmp_path):
                                       work_dir=tmp_path / "w")
     assert "not visible in the PowerPoint render" in errors[0]
     assert "missing from the native render" in errors[1] and "对比与消融结果" in errors[1]
+
+
+def test_usage_limit_defers_and_keeps_the_open_audit_issues(job_at_reconstruct):
+    # Measured 2026-10-18: the last session hit the usage limit and the S01 finding was lost.
+    job = job_at_reconstruct["job"]
+    result = job_at_reconstruct["reconstruct"]("missing_then_limit")
+    assert result.get("deferred") is True, result
+    assert load_job_state(job)["state"] != "blocked"
+    carried = read_json(service_path(job, "reconstruct-issues.json"))
+    assert any("S02: reviewed text is not native text" in issue for issue in carried["issues"])
+    assert read_json(service_path(job, "deferred.json"))["retry_after"]
+
+
+def test_chart_axis_ids_powerpoint_cannot_read_are_renumbered(tmp_path):
+    # Measured 2026-10-18: PowerPoint refused a deck whose chart used axis id 2226939960.
+    import zipfile
+    from pptx import Presentation
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Inches
+    from autoppt_service.reconstruct import normalize_chart_axis_ids
+
+    deck = Presentation()
+    data = CategoryChartData()
+    data.categories = ["A", "B"]
+    data.add_series("s", (1, 2))
+    deck.slides.add_slide(deck.slide_layouts[6]).shapes.add_chart(
+        XL_CHART_TYPE.BAR_CLUSTERED, 0, 0, Inches(4), Inches(3), data)
+    path = tmp_path / "deck.pptx"
+    deck.save(path)
+    assert normalize_chart_axis_ids(path) == []  # python-pptx ids are already in range
+    with zipfile.ZipFile(path) as package:
+        items = [(i, package.read(i.filename)) for i in package.infolist()]
+    with zipfile.ZipFile(path, "w") as package:
+        for info, raw in items:
+            if info.filename == "ppt/charts/chart1.xml":
+                text = raw.decode("utf-8")
+                for old in sorted(set(re.findall(r'axId val="(-?\d+)"', text))):
+                    text = text.replace(f'val="{old}"', f'val="{2226939960 + len(old)}"')
+                raw = text.encode("utf-8")
+            package.writestr(info, raw)
+    assert normalize_chart_axis_ids(path) == ["ppt/charts/chart1.xml"]
+    text = zipfile.ZipFile(path).read("ppt/charts/chart1.xml").decode("utf-8")
+    ids = [int(v) for v in re.findall(r'(?:axId|crossAx) val="(-?\d+)"', text)]
+    assert ids and max(ids) <= 2**31 - 1
+    axes = set(re.findall(r'<c:axId val="(\d+)"', text))
+    assert set(re.findall(r'<c:crossAx val="(\d+)"', text)) <= axes  # cross references still match
+    Presentation(str(path))  # still a valid package
+
+
+def test_unopenable_slides_are_named(tmp_path):
+    from pptx import Presentation
+    from autoppt_service.reconstruct import locate_unopenable_slides
+
+    deck = Presentation()
+    for word in ("ok", "broken", "ok"):
+        deck.slides.add_slide(deck.slide_layouts[6]).shapes.add_textbox(0, 0, 100, 100).text_frame.text = word
+    deck.save(tmp_path / "deck.pptx")
+
+    def renderer(pptx, out_dir):
+        if "broken" in "".join(s.shapes[0].text_frame.text for s in Presentation(str(pptx)).slides):
+            raise RuntimeError("PowerPoint could not open the file.")
+        return []
+
+    assert locate_unopenable_slides(tmp_path / "deck.pptx", renderer, ["S01", "S02", "S03"], tmp_path / "w") == ["S02"]
+
+
+def test_resumed_job_rechecks_the_deck_before_starting_an_agent(job_at_reconstruct):
+    job = job_at_reconstruct["job"]
+    assert job_at_reconstruct["reconstruct"]("missing_then_limit").get("deferred") is True
+    result = job_at_reconstruct["reconstruct"]("ok")  # the deck on disk still lacks a S02 line
+    assert result["job_state"] == "cp3_native_preview", result
+    attempts = read_json(service_path(job, "reconstruct-report.json"))["attempts"]
+    assert attempts[0]["worker_recheck"] and "S02" in attempts[0]["errors"][0]
+    assert attempts[1]["attempt"] == 1 and len(attempts) == 2
+    assert not service_path(job, "reconstruct-issues.json").exists()
+
+
+def test_small_visible_text_is_reread_on_an_upscaled_render(tmp_path):
+    # Measured 2026-10-18 on S05/S08: small visible lines OCR skipped at 1x, and a legend fragment on the master.
+    from autoppt_service.reconstruct import render_visibility_errors
+
+    renders = {"S05": tmp_path / "render.png"}
+    masters = {"S05": tmp_path / "master.png"}
+    for path in (*renders.values(), *masters.values()):
+        Image.new("RGB", (10, 10)).save(path)
+    line = "输出街区积水风险等级（低、中、高）"
+
+    def ocr(image, out_json):
+        name = Path(image).name
+        if name == "master.png":
+            return {"lines": [{"text": line}, {"text": "0 准确率到 FI 值"}]}
+        return {"lines": [{"text": "方法分三步"}] + ([{"text": line}] if name.endswith("-2x.png") else [])}
+
+    assert render_visibility_errors(renders, {"S05": [line]}, ocr=ocr, masters=masters, work_dir=tmp_path / "w") == []
+    assert (tmp_path / "w" / "S05-render-2x.png").exists()

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -112,14 +113,38 @@ class ProfilePool:
         self._resting_until[profile.name] = time.monotonic() + self._cooldown_s
 
 
+# Measured 2026-10-18: an older CLI found on PATH (0.155.1) rejected the configured model with HTTP 400
+# and every session failed at once; the real runs used 0.163.0.
+MIN_CODEX_VERSION = (0, 163, 0)
+_checked_versions: dict[str, tuple[int, ...] | None] = {}
+
+
+def codex_version(binary: str) -> tuple[int, ...] | None:
+    """``(major, minor, patch)`` reported by ``codex --version``, or None when it cannot be read."""
+    if binary not in _checked_versions:
+        try:
+            completed = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=30)
+            match = re.search(r"(\d+)\.(\d+)\.(\d+)", completed.stdout or "")
+            _checked_versions[binary] = tuple(int(part) for part in match.groups()) if match else None
+        except (OSError, subprocess.TimeoutExpired):
+            _checked_versions[binary] = None
+    return _checked_versions[binary]
+
+
 def codex_command() -> list[str]:
-    """Resolve the Codex CLI; ``AUTOPPT_CODEX_BIN`` pins a specific build."""
+    """Resolve the Codex CLI; ``AUTOPPT_CODEX_BIN`` pins a specific build.
+
+    A CLI older than ``MIN_CODEX_VERSION`` is refused before any session starts.
+    """
     pinned = os.getenv("AUTOPPT_CODEX_BIN", "").strip()
-    if pinned:
-        return [pinned]
-    found = shutil.which("codex")
+    found = pinned or shutil.which("codex")
     if not found:
         raise FileNotFoundError("codex CLI not found; install it or set AUTOPPT_CODEX_BIN")
+    version = codex_version(found)
+    if version is not None and version < MIN_CODEX_VERSION:
+        wanted = ".".join(map(str, MIN_CODEX_VERSION))
+        raise FileNotFoundError(f"codex CLI {'.'.join(map(str, version))} at {found} is older than {wanted}; "
+                                "set AUTOPPT_CODEX_BIN to a current build")
     return [found]
 
 

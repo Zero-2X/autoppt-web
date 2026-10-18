@@ -203,7 +203,10 @@ Write:
 
 Do not open PowerPoint or any Office application; the Worker renders the deck,
 audits it (slide count, every reviewed text line native on its slide, real
-charts when there is chart data) and sends problems back to you. Finish with
+charts when there is chart data) and sends problems back to you. PowerPoint is
+stricter than the schema: chart axis ids (`c:axId`, `c:crossAx`) must lie
+between 1 and 2147483647, or PowerPoint refuses to open the whole deck. When the
+Worker reports slides PowerPoint cannot open, change only those slides. Finish with
 `service/status.json` `"phase": "reconstruct", "state": "done"`.
 
 ## 8. Other phases
