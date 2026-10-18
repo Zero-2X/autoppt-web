@@ -14,6 +14,7 @@
 - [ ] 计划任务：`python -m autoppt_api.maintenance all` 每 5 分钟（通知、过期、对账、告警、账本核对、清理）
 - [ ] 补全 `autoppt_service/templates/redactions.json` 后构建 Worker 模板；处理模板清单里列出的“代码中含案例名”的脚本
 - [ ] 原生重建阶段（P1/P5 未完成的部分）上线前，只开放“规划包”和“图片版”两个档位
+- [ ] 确认 Codex 账号仍有带 `image_gen` 的模型（2026-10-18 当前账号的 `gpt-6-luna`、`gpt-5.6-terra` 都没有，新任务会在母版阶段报 `image_gen_unavailable`）；有了以后跑 `python scripts/build_style_samples.py --jobs-root <目录>` 生成风格示例图
 
 ## 2. 金标准样例
 

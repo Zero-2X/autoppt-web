@@ -480,7 +480,8 @@ async function pageNewJob() {
       h("div", { class: "grid three" }, opts.styles.map((s) => h("button", {
         class: `choice ${w.style === s.id ? "selected" : ""}`,
         onclick: () => set({ style: s.id, styleExplicit: false }, true),
-      }, h("strong", {}, L(s), s.is_default ? tr("（默认）", " (default)") : ""), h("small", {}, L(s, "use_when")), swatches(s.palette)))),
+      }, h("strong", {}, L(s), s.is_default ? tr("（默认）", " (default)") : ""), h("small", {}, L(s, "use_when")),
+        s.sample_image ? h("img", { class: "style-sample", src: s.sample_image, alt: tr(`${s.label} 示例页`, `${L(s)} sample slide`), loading: "lazy" }) : swatches(s.palette)))),
       style && style.requires_explicit_choice ? h("label", { class: "check" },
         h("input", { type: "checkbox", checked: w.styleExplicit, onchange: (e) => set({ styleExplicit: e.target.checked }) }),
         tr(`我确认选择“${style.label}”（${style.dark ? "深色" : "极简"}风格需要主动确认）`, `I choose “${L(style)}” (a ${style.dark ? "dark" : "minimal"} style needs an explicit choice)`)) : null,

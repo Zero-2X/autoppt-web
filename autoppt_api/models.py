@@ -332,6 +332,27 @@ class ProviderKey(Base):
     created_at: Mapped[datetime] = _created()
 
 
+class ModelToken(Base):
+    """A per-job credential for the model gateway (API-key mode, D2): bounded in time and input tokens.
+
+    Only the hash is stored; the provider keys themselves never leave the gateway's environment."""
+
+    __tablename__ = "model_tokens"
+    id: Mapped[str] = _id()
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
+    worker_id: Mapped[str] = mapped_column(ForeignKey("workers.id"))
+    phase: Mapped[str] = mapped_column(String(16))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    budget_input_tokens: Mapped[int] = mapped_column(BigInteger)
+    input_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    cached_input_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    output_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    requests: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = _created()
+
+
 class UsageRecord(Base):
     __tablename__ = "usage_records"
     id: Mapped[str] = _id()

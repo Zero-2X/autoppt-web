@@ -39,6 +39,13 @@ class Settings:
     sms_provider: str = field(default_factory=lambda: _env("SMS_PROVIDER", ""))
     sms_webhook_url: str = field(default_factory=lambda: _env("SMS_WEBHOOK_URL", ""))
     sms_webhook_secret: str = field(default_factory=lambda: _env("SMS_WEBHOOK_SECRET", ""))
+    # Model gateway (API-key mode, D2).  Provider keys are read from this JSON file only on the gateway host:
+    # [{"label": "openai-1", "key": "sk-...", "max_concurrency": 4}, ...]; empty = gateway disabled.
+    provider_keys_file: str = field(default_factory=lambda: _env("PROVIDER_KEYS_FILE", ""))
+    gateway_upstream_url: str = field(default_factory=lambda: _env("GATEWAY_UPSTREAM_URL", "https://api.openai.com/v1"))
+    # Agent input tokens one job may spend through the gateway (J-plan-real-001 used 44 M end to end).
+    gateway_job_budget_input_tokens: int = field(default_factory=lambda: int(_env("GATEWAY_JOB_BUDGET", "80000000")))
+    gateway_token_ttl_s: int = 6 * 3600
     # WeChat website login (open.weixin.qq.com "网站应用"); disabled while empty.
     wechat_app_id: str = field(default_factory=lambda: _env("WECHAT_APP_ID", ""))
     wechat_app_secret: str = field(default_factory=lambda: _env("WECHAT_APP_SECRET", ""))

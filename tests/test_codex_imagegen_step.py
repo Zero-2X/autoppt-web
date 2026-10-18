@@ -35,7 +35,7 @@ if mode == "marker_once" and calls == 1:
     slide_prompt = slide_prompt + chr(10) + "SLIDE_PROMPT>>>"  # seen with real 5,000-character prompts
 if mode == "marker_once" and calls == 2:
     assert "passed a marker line" in prompt, "retry must name the marker problem"
-records = 2 if mode == "two_calls" else 1
+records = {"two_calls": 2, "no_tool": 0}.get(mode, 1)  # no_tool: a model without image_gen that just says "done"
 lines = []
 for _ in range(records):
     exec_id = f"exec-{uuid.uuid4()}"
@@ -195,3 +195,15 @@ def test_redo_regenerates_only_rejected_slides_with_the_reviewers_note(tmp_path:
     assert s02["prompt_match"] == "exact" and s02["revisions"][0]["round"] == 1
     manifest = json.loads(prompts.read_text(encoding="utf-8"))
     assert manifest["slides"][1]["prompt_zh"] == s02["prompt"]
+
+
+def test_a_model_without_image_gen_stops_the_run_early(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("FAKE_CODEX_MODE", "no_tool")
+    monkeypatch.setenv("AUTOPPT_CODEX_MODEL", "gpt-6-luna")
+    workspace = tmp_path / "job"
+    report = generate_masters(_prompts(workspace, 3), profiles=_profiles(tmp_path, "a"), command=_fake_command(tmp_path))
+    assert (tmp_path / "homes" / "a" / "calls.txt").read_text() == "2"  # two sessions, not six
+    assert [s["status"] for s in report["slides"]] == ["blocked"] * 3
+    assert report["slides"][1]["issues"] == ["skipped: image_gen unavailable"]
+    assert report["handoff_verdict"] == "blocked"
+    assert report["handoff_issues"][0].startswith("image_gen_unavailable: two sessions on gpt-6-luna made no image_gen call")

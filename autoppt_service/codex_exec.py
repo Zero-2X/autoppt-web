@@ -23,12 +23,20 @@ from typing import Any, Iterable, Sequence
 RATE_LIMIT_MARKERS = ("rate limit", "rate_limit", "usage limit", "usage_limit", "429", "quota")
 
 
+GATEWAY_URL_ENV = "AUTOPPT_GATEWAY_URL"
+GATEWAY_TOKEN_ENV = "AUTOPPT_GATEWAY_TOKEN"  # Codex keeps *TOKEN* variables out of agent shell commands
+
+
 @dataclass(frozen=True)
 class CodexProfile:
-    """One logged-in Codex account; ``codex_home=None`` uses the default home."""
+    """One logged-in Codex account; ``codex_home=None`` uses the default home.
+
+    ``gateway=True`` (API-key mode, D2): no login; ``codex exec`` talks to the AutoPPT model gateway with the
+    per-job token the Worker obtained for its lease (``AUTOPPT_GATEWAY_URL`` / ``AUTOPPT_GATEWAY_TOKEN``)."""
 
     name: str
     codex_home: Path | None = None
+    gateway: bool = False
 
     def home(self) -> Path:
         if self.codex_home is not None:
@@ -83,7 +91,8 @@ def load_profiles(path: Path | None) -> list[CodexProfile]:
     profiles = []
     for item in payload.get("profiles", payload) if isinstance(payload, dict) else payload:
         home = str(item.get("codex_home") or "").strip()
-        profiles.append(CodexProfile(name=str(item["name"]), codex_home=Path(home) if home else None))
+        profiles.append(CodexProfile(name=str(item["name"]), codex_home=Path(home) if home else None,
+                                     gateway=bool(item.get("gateway"))))
     if not profiles:
         raise ValueError(f"no Codex profiles in {path}")
     return profiles
@@ -161,6 +170,17 @@ def windows_sandbox_mode() -> str | None:
         return None
     value = os.getenv("AUTOPPT_CODEX_WINDOWS_SANDBOX", "unelevated").strip()
     return value or None
+
+
+def gateway_args(base_url: str) -> list[str]:
+    """Config overrides that point ``codex exec`` at the AutoPPT gateway; nothing is written to config.toml."""
+    return [
+        "-c", 'model_provider="autoppt"',
+        "-c", 'model_providers.autoppt.name="AutoPPT gateway"',
+        "-c", f'model_providers.autoppt.base_url="{base_url}"',
+        "-c", f'model_providers.autoppt.env_key="{GATEWAY_TOKEN_ENV}"',
+        "-c", 'model_providers.autoppt.wire_api="responses"',
+    ]
 
 
 def build_exec_args(
@@ -243,6 +263,11 @@ def run_codex_exec(
         exec_options["model"] = os.environ["AUTOPPT_CODEX_MODEL"].strip()
     argv = [*(command or codex_command()), *build_exec_args(last_message_path=last_message_path, **exec_options)]
     env = dict(os.environ)
+    if profile.gateway:
+        if not (env.get(GATEWAY_URL_ENV) and env.get(GATEWAY_TOKEN_ENV)):
+            return CodexExecResult(profile=profile.name, returncode=None, thread_id="", duration_s=0.0,
+                                   errors=["gateway_token_missing: the Worker did not obtain a model token for this lease"])
+        argv[-1:-1] = gateway_args(env[GATEWAY_URL_ENV])  # before the trailing "-" (prompt on stdin)
     if profile.codex_home is not None:
         env["CODEX_HOME"] = str(profile.codex_home)
     # Bytes, not text mode: Windows text pipes rewrite "\n" as "\r\n", which

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -155,6 +156,10 @@ def generate_masters(
     usage_log = workspace / "service" / "usage.jsonl"
     wanted = set(slide_ids or [])
     report_slides: list[dict[str, Any]] = []
+    # Measured 2026-10-18: once the account stopped offering gpt-6.1-sol, sessions on the remaining models had no
+    # image_gen tool at all; agents said so, or just replied "done".  Two attempts without any call and nothing
+    # generated yet stop the run instead of spending a session on every slide.
+    no_call_streak, generated_count, unavailable = 0, 0, False
 
     for slide in json.loads(handoff_path.read_text(encoding="utf-8")).get("slides", []):
         slide_id = str(slide.get("slide_id"))
@@ -162,6 +167,10 @@ def generate_masters(
             continue
         if slide.get("status") == "generated":
             report_slides.append({"slide_id": slide_id, "status": "generated", "attempts": [], "resumed": True})
+            continue
+        if unavailable:
+            report_slides.append({"slide_id": slide_id, "status": "blocked", "attempts": [],
+                                  "issues": ["skipped: image_gen unavailable"]})
             continue
         attempts: list[dict[str, Any]] = []
         retry_note = ""
@@ -199,6 +208,11 @@ def generate_masters(
                 },
             )
             if outcome["status"] == "generated":
+                no_call_streak, generated_count = 0, generated_count + 1
+                break
+            no_call_streak = no_call_streak + 1 if "expected_one_host_imagegen_call:0" in outcome["issues"] else 0
+            if no_call_streak >= 2 and generated_count == 0:
+                unavailable = True
                 break
             if outcome.get("rate_limited"):
                 pool.rest(profile)
@@ -222,6 +236,12 @@ def generate_masters(
         "handoff_verdict": verification.get("verdict"),
         "handoff_issues": verification.get("issues", []),
     }
+    if unavailable:
+        model = os.getenv("AUTOPPT_CODEX_MODEL", "").strip() or "the configured model"
+        report["handoff_verdict"] = "blocked"
+        report["handoff_issues"] = [
+            f"image_gen_unavailable: two sessions on {model} made no image_gen call; the Codex account or model no longer "
+            "offers the built-in image_gen tool (check the account's models before retrying)", *report["handoff_issues"]]
     report_path = workspace / "references" / "codex-imagegen-step-report.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

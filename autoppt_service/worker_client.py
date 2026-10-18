@@ -24,11 +24,13 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import shutil
 import sys
 import threading
 import time
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any, Sequence
 
@@ -47,6 +49,22 @@ SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024 * 1024
 
 class WorkerClientError(RuntimeError):
     pass
+
+
+@contextmanager
+def gateway_environment(token: dict[str, Any] | None):
+    """Expose the lease's model token to ``codex exec`` for one phase only."""
+    from autoppt_service.codex_exec import GATEWAY_TOKEN_ENV, GATEWAY_URL_ENV
+
+    if not token:
+        yield
+        return
+    os.environ[GATEWAY_URL_ENV], os.environ[GATEWAY_TOKEN_ENV] = token["base_url"], token["token"]
+    try:
+        yield
+    finally:
+        os.environ.pop(GATEWAY_URL_ENV, None)
+        os.environ.pop(GATEWAY_TOKEN_ENV, None)
 
 
 def snapshot_bytes(job_dir: Path) -> bytes:
@@ -172,7 +190,9 @@ class ApiWorker:
             uploads = self._fetch_uploads(job_dir, lease) if phase == "intake" else {}
             from autoppt_service.watchdog import guarded_phase
 
-            with guarded_phase(job_dir, timeout_s=self.phase_timeouts.get(phase, 3600)) as watchdog:
+            gateway_token = self._gateway_token(job_id, phase, lease_token)
+            with guarded_phase(job_dir, timeout_s=self.phase_timeouts.get(phase, 3600)) as watchdog, \
+                    gateway_environment(gateway_token):
                 result = run_phase(
                     job_dir, phase, job_id=job_id, mock=self.mock, request=lease["request"], uploads=uploads,
                     profiles_path=self.profiles, template=self.template, command=self.command,
@@ -181,7 +201,7 @@ class ApiWorker:
                 result = {**result, "reason": f"watchdog stopped {', '.join(watchdog['killed'])}"}
             from autoppt_service.leakguard import scan_outputs
 
-            findings = scan_outputs(job_dir, self.secrets())
+            findings = scan_outputs(job_dir, self.secrets() | ({gateway_token["token"]} if gateway_token else set()))
             if findings:
                 # Upload nothing: the snapshot and deliverables would carry the leaked text.
                 stop.set()
@@ -210,6 +230,16 @@ class ApiWorker:
         finally:
             stop.set()
         return {"job_id": job_id, "phase": phase, **report}
+
+    def _gateway_token(self, job_id: str, phase: str, lease_token: str) -> dict[str, Any] | None:
+        """A model token for this lease when the profiles use the gateway (API-key mode) and the phase calls Codex."""
+        from autoppt_service.codex_exec import load_profiles
+
+        if self.mock or phase not in ("planning", "masters", "reconstruct"):
+            return None
+        if not any(profile.gateway for profile in load_profiles(self.profiles)):
+            return None
+        return self._post(f"/api/worker/jobs/{job_id}/model-token", {"lease_token": lease_token, "phase": phase})
 
     @staticmethod
     def _discard_local(job_dir: Path) -> None:

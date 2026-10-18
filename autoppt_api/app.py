@@ -47,6 +47,7 @@ from autoppt_api.models import (
     JobFile,
     JobPhase,
     LessonCandidate,
+    ModelToken,
     Notification,
     PricingRule,
     RedeemCode,
@@ -110,6 +111,11 @@ class LoginRequest(BaseModel):
     email: str | None = None
     phone: str | None = None
     code: str
+
+
+class ModelTokenBody(BaseModel):
+    lease_token: str
+    phase: str = Field(min_length=1, max_length=16)
 
 
 class TicketRequest(BaseModel):
@@ -226,6 +232,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     engine = make_engine(settings.database_url)
     Base.metadata.create_all(engine)  # Alembic migrations take over in deployed environments
     factory = make_session_factory(engine)
+    from autoppt_api.gateway import KeyPool
+
+    key_pool = KeyPool.from_file(settings.provider_keys_file)  # provider keys stay in this process's memory
     storage = LocalStorage(settings.storage_dir, key=settings.storage_key or None)
     app = FastAPI(title="AutoPPT API", version="0.1.0")
     app.state.settings, app.state.engine, app.state.session_factory, app.state.storage = settings, engine, factory, storage
@@ -368,7 +377,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/options")
     def options() -> dict[str, Any]:
-        return export_options()
+        payload = export_options()
+        samples = Path(__file__).resolve().parents[1] / "web" / "styles"  # scripts/build_style_samples.py
+        for style in payload["styles"]:
+            if (samples / f"{style['id']}.jpg").is_file():
+                style["sample_image"] = f"/styles/{style['id']}.jpg"
+        return payload
 
     @app.get("/api/pricing")
     def pricing(session: Session = Depends(db)) -> dict[str, Any]:
@@ -869,6 +883,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         return await anyio.to_thread.run_sync(register)
 
+    @app.post("/api/worker/jobs/{job_id}/model-token")
+    def worker_model_token(job_id: str, body: ModelTokenBody, worker: Worker = Depends(current_worker),
+                           session: Session = Depends(db)) -> dict[str, Any]:
+        """A model token for this lease (API-key mode): the job's remaining input-token budget, a few hours long."""
+        from autoppt_api.services import require_lease
+
+        if not key_pool:
+            raise HTTPException(404, "model gateway is not configured")
+        job = leased(job_id, worker, session)
+        require_lease(job, worker, body.lease_token)
+        spent = int(session.scalar(select(func.coalesce(func.sum(ModelToken.input_tokens), 0))
+                                   .where(ModelToken.job_id == job_id)) or 0)
+        remaining = settings.gateway_job_budget_input_tokens - spent
+        if remaining <= 0:
+            raise HTTPException(429, f"model budget for this job is used up ({spent} input tokens)")
+        for old in session.scalars(select(ModelToken).where(ModelToken.job_id == job_id, ModelToken.revoked.is_(False))):
+            old.revoked = True  # one live token per job
+        token = secrets.token_urlsafe(32)
+        expires = now() + timedelta(seconds=settings.gateway_token_ttl_s)
+        session.add(ModelToken(job_id=job_id, worker_id=worker.id, phase=body.phase, token_hash=hash_secret(token),
+                               budget_input_tokens=remaining, expires_at=expires))
+        return {"token": token, "base_url": f"{settings.public_base_url.rstrip('/')}/gateway/v1",
+                "budget_input_tokens": remaining, "expires_at": iso(expires)}
+
     @app.post("/api/worker/jobs/{job_id}/complete")
     def worker_complete(job_id: str, body: PhaseReport, worker: Worker = Depends(current_worker), session: Session = Depends(db),
                         idempotency_key: str | None = Header(default=None)):
@@ -1033,6 +1071,95 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def admin_ledger(_admin: User = Depends(admin_user), session: Session = Depends(db)) -> dict[str, Any]:
         issues = ledger.check_ledger(session)
         return {"ok": not issues, "issues": issues}
+
+    @app.get("/api/admin/gateway")
+    def admin_gateway(_admin: User = Depends(admin_user), session: Session = Depends(db)) -> dict[str, Any]:
+        tokens = session.scalars(select(ModelToken).order_by(ModelToken.created_at.desc()).limit(100)).all()
+        return {"enabled": bool(key_pool), "upstream": settings.gateway_upstream_url, "keys": key_pool.stats(),
+                "job_budget_input_tokens": settings.gateway_job_budget_input_tokens,
+                "tokens": [{"job_id": t.job_id, "phase": t.phase, "requests": t.requests, "input_tokens": t.input_tokens,
+                            "cached_input_tokens": t.cached_input_tokens, "output_tokens": t.output_tokens,
+                            "budget_input_tokens": t.budget_input_tokens, "revoked": t.revoked,
+                            "expires_at": iso(t.expires_at), "created_at": iso(t.created_at)} for t in tokens]}
+
+    @app.api_route("/gateway/v1/{path:path}", methods=["GET", "POST"])
+    async def gateway(path: str, request: Request, authorization: str = Header(default="")) -> Response:
+        import httpx
+
+        from autoppt_api.gateway import ALLOWED_PATHS, RETRY_STATUSES, UsageMeter, retry_after_seconds
+
+        if not key_pool:
+            raise HTTPException(404, "model gateway is not configured")
+        if path.split("/", 1)[0] not in ALLOWED_PATHS:
+            raise HTTPException(404, "not forwarded")
+        if not authorization.lower().startswith("bearer "):
+            raise HTTPException(401, "missing model token")
+        token_hash = hash_secret(authorization[7:])
+
+        def check() -> str:  # in a thread: never wait for the database on the event loop
+            with factory() as session:
+                token = session.scalars(select(ModelToken).where(ModelToken.token_hash == token_hash)).first()
+                if token is None or token.revoked or aware(token.expires_at) < now():
+                    raise HTTPException(401, "invalid or expired model token")
+                job = session.get(Job, token.job_id)
+                if job is None or job.state in ("cancelled", "failed", "deleted", "delivered"):
+                    raise HTTPException(403, "the job is not running")
+                if token.input_tokens >= token.budget_input_tokens:
+                    raise HTTPException(429, "the model budget for this job is used up")
+                return token.id
+
+        def record(token_id: str, usage: dict[str, int]) -> None:
+            with factory() as session:
+                token = session.get(ModelToken, token_id)
+                token.requests += 1
+                token.input_tokens += usage.get("input_tokens", 0)
+                token.cached_input_tokens += usage.get("cached_input_tokens", 0)
+                token.output_tokens += usage.get("output_tokens", 0)
+                session.commit()
+
+        token_id = await anyio.to_thread.run_sync(check)
+        body = await request.body()
+        if getattr(app.state, "gateway_client", None) is None:
+            app.state.gateway_client = httpx.AsyncClient(timeout=httpx.Timeout(600, connect=15),
+                                                         transport=getattr(app.state, "gateway_transport", None))
+        client = app.state.gateway_client
+        upstream, key, tried = None, None, set()
+        headers = {"Content-Type": request.headers.get("content-type", "application/json"),
+                   "Accept": request.headers.get("accept", "*/*")}
+        while upstream is None:
+            key = key_pool.acquire(tried)
+            if key is None:
+                raise HTTPException(503, "no provider key is available right now; try again later")
+            tried.add(key.label)
+            outgoing = client.build_request(request.method, f"{settings.gateway_upstream_url.rstrip('/')}/{path}",
+                                            params=request.query_params, content=body,
+                                            headers={**headers, "Authorization": f"Bearer {key.key}"})
+            try:
+                upstream = await client.send(outgoing, stream=True)
+            except httpx.HTTPError:
+                key_pool.release(key, failed_status=502)
+                continue
+            if upstream.status_code in RETRY_STATUSES:  # nothing streamed yet: rest this key, try the next
+                retry = retry_after_seconds(upstream.headers)
+                await upstream.aclose()
+                key_pool.release(key, failed_status=upstream.status_code, retry_after=retry)
+                upstream = None
+        meter = UsageMeter()
+        answer, used_key = upstream, key
+
+        async def relay():
+            try:
+                async for chunk in answer.aiter_bytes():
+                    meter.feed(chunk)
+                    yield chunk
+            finally:
+                with anyio.CancelScope(shield=True):
+                    await answer.aclose()
+                    key_pool.release(used_key, failed_status=answer.status_code if answer.status_code >= 400 else None)
+                    await anyio.to_thread.run_sync(record, token_id, meter.finish())
+
+        return StreamingResponse(relay(), status_code=answer.status_code,
+                                 headers={k: v for k in ("content-type", "x-request-id") if (v := answer.headers.get(k))})
 
     @app.get("/api/admin/audit")
     def admin_audit(limit: int = Query(100, le=1000), _admin: User = Depends(admin_user), session: Session = Depends(db)) -> list[dict[str, Any]]:

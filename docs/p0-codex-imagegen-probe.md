@@ -82,3 +82,18 @@ python -m autoppt_service.codex_imagegen_step <job>/image-prompts.json --profile
 - 本次经验没有写进原仓库的 `improvement/` 台账（用户要求原仓库不改），记录在本文件中。
 - 实测产物在被忽略的 `D:/autoppt-jobs/_probes/`；图片版 PPTX 的 sha256 为
   `75d10157e0d6e3464fe517dfe372963c93f78374fc97ba9bd23ae0d7133135f8`。
+
+## 2026-10-18 复测：当前账号的模型都没有 `image_gen`
+
+为风格示例图跑 `scripts/build_style_samples.py`（每种风格 1 页，虚构内容）时：
+
+- `gpt-6-luna`：6 种风格各 2 次会话，代理都回复“the built-in `image_gen` tool isn’t available in this session”，没有出图。
+- `gpt-5.6-terra`：代理在工具列表里搜索 image 相关工具，没找到，仍然回复“done”；rollout 里没有 `image_gen.generation` 记录，
+  来源校验照常判为未生成（没有被“done”骗过）。
+- 2026-10-17 的母版是用 `gpt-6.1-sol` 出的；这个账号 2026-10-18 11:28 起不再提供 `gpt-6.1-sol`（见
+  [母版与重建实测](p1-real-run-masters-reconstruct.md)）。所以**眼下这个账号做不了新的 ImageGen 母版**，
+  新任务会停在母版阶段。需要用户确认账号是否还能用带 `image_gen` 的模型，或换账号。
+- 改进（`codex_imagegen_step`）：连续两次会话都没有任何 `image_gen` 调用、且本轮还没出过图时，停止整轮，
+  报 `image_gen_unavailable`（带模型名），不再每页都花一次会话。
+- 模型网关（API key 模式）已能让真实 `codex` CLI 走通（见开发清单 P2），但 API key 下 `image_gen` 是否可用仍未实测。
+

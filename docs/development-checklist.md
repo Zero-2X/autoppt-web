@@ -388,10 +388,10 @@ draft → estimated → paid(积分冻结) → queued → intake → planning
       申请产物上传地址、提交检查点、完成或失败；所有调用幂等
   - [x] Worker 客户端 `autoppt_service/worker_client.py`：领取 → 按快照恢复任务目录 → 运行阶段（后台心跳）→ 上传预览、交付物、任务目录快照 → 上报状态、用量和经验候选；按能力（intake/codex/office/package）分派阶段
 - [x] 估价服务：读 `pricing_rules`，按阶段拆分，每个阶段完成时结算自己那一份；默认价格表标记为 provisional，P1 实测后由管理员更新
-- [ ] 模型网关 / Key 池（内测期用本机 Codex 账号池，由 Worker 侧 `ProfilePool` 轮换和限额延后；`provider_keys` 只登记标签，不存凭证；以下各项等 D2 改用 API key 时再做）：
-  - [ ] 每个任务签发临时令牌，绑定预算上限
-  - [ ] Agent SDK 通过 `ANTHROPIC_BASE_URL` 指向网关，真实 key 不下发到 Worker
-  - [ ] 记录用量；遇到 429 或 5xx 时退避并切换到其他 key；按 key 控制并发
+- [x] 模型网关 / Key 池（API key 模式，D2 商用前启用；内测期仍用本机 Codex 账号池）：`/gateway/v1/*` 只转发 Responses API（`responses`、`models`），真实 key 只在网关进程的 `AUTOPPT_API_PROVIDER_KEYS_FILE` 里；Worker 的 profiles 里写 `"gateway": true` 即启用。2026-10-18 用真实 `codex` 0.163.0 CLI → 网关 → 模拟上游跑通（退出码 0、回复正确、上游只看到池里的 key、用量记到任务令牌上）；API key 下 `image_gen` 是否可用仍未实测（P0）
+  - [x] 每个任务签发临时令牌（`POST /api/worker/jobs/{id}/model-token`，绑定租约，6 小时）：预算为整单的剩余输入 token（默认 8,000 万），换新令牌时旧令牌作废、预算不重置；任务结束、取消后令牌立即失效
+  - [x] `codex exec` 通过 `-c model_providers.autoppt.*` 指向网关（不改 `config.toml`），令牌放在 `AUTOPPT_GATEWAY_TOKEN`（Codex 不把含 TOKEN 的变量传给代理的命令），只在该阶段存在，并加入泄露扫描；真实 key 不下发到 Worker
+  - [x] 从流里的 `response.completed`（或 JSON 的 `usage`）记用量；429/5xx 时该 key 休息（`Retry-After` 或 60 s）并换下一个 key（尚未向用户输出任何内容之前）；每个 key 有并发上限；管理接口 `GET /api/admin/gateway` 显示各 key 的请求、错误、休息和各任务令牌的用量（不显示 key）
 - [x] 通知：任务进入检查点、交付、失败、暂停时写入通知队列，`python -m autoppt_api.maintenance notify` 通过 SMTP 发送（未配置时只记日志）
   - [x] 短信通知：只绑定手机号的用户，检查点、交付等通知以短信发送标题（正文请登录查看）
 
@@ -418,7 +418,7 @@ CP3 管理员不能代批）、取消、系统失败退款、可重试失败退�
   - [x] ③ 场景、页数（固定/范围/按时长）、风格（色板示意，深色/极简须勾选确认）、受众、语言、信息密度
   - [x] ④ 高级选项：封面信息、必须包含/避免、画幅、图表、字体（原生版必须勾选）、审核节点（CP3 锁定）、附加项、保留期、截止时间、Logo 权属
   - [x] ⑤ 估价与确认（分阶段明细、冻结金额、可用积分、校验警告、层级说明；校验错误逐条显示）
-  - [ ] 风格示例图（需要脱敏示例素材）
+  - [ ] 风格示例图：脚本 `scripts/build_style_samples.py` 和展示都已就绪（有图时向导显示示例页，否则显示色板）；2026-10-18 实跑被阻塞：当前账号的模型都没有 `image_gen`（见 [P0 复测](p0-codex-imagegen-probe.md)）
 - [x] 任务详情：状态、已结算/冻结、阶段时间线（只显示状态变化和阶段说明，不显示代理原始输出）、取消、删除
 - [x] 审核界面：
   - [x] CP1 大纲逐页批注
