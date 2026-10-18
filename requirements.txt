@@ -8,7 +8,12 @@ pypdf
 python-docx
 python-pptx
 psutil
-# Optional: pypdfium2 renders PDF pages for vectorization (preferred over PyMuPDF, which is AGPL).
+# PDF pages to PNG for OCR of scanned pages and for vectorization (Apache-2.0/BSD; preferred over AGPL PyMuPDF).
+pypdfium2
+# Ruled tables in PDFs (MIT).
+pdfplumber
+# HEIC/HEIF phone photos (BSD-3; bundles LGPL libheif as a shared library).
+pillow-heif
 # Backend API:
 alembic
 fastapi

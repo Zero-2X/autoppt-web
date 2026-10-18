@@ -1,7 +1,9 @@
-"""PDF: text layer per page, embedded images, and OCR flags for scanned pages.
+"""PDF: text layer per page, ruled tables, embedded images, and OCR flags for scanned pages.
 
 OCR itself is not run here; pages whose text layer is (nearly) empty are put
-on the manifest's ``ocr_queue`` for a later OCR step.
+on the manifest's ``ocr_queue`` for the OCR step (``parsers.ocr_pages``).
+Tables are read with pdfplumber's ruling-line detection only, so body text laid
+out in columns is not mistaken for a table.
 """
 
 from __future__ import annotations
@@ -17,6 +19,8 @@ from autoppt_service.parsers.base import (
     SourceFile,
     SourceRejected,
     image_asset,
+    table_item,
+    table_record,
     text_items,
 )
 
@@ -116,6 +120,7 @@ def parse_pdf(source: SourceFile, work_dir: Path, limits: IntakeLimits) -> Parse
                 )
             )
 
+    _add_tables(source, result, len(pages))
     if result.ocr_queue:
         result.status = "needs_ocr"
         result.warnings.append(f"{len(result.ocr_queue)} 页没有可用文字层，需要 OCR")
@@ -124,5 +129,46 @@ def parse_pdf(source: SourceFile, work_dir: Path, limits: IntakeLimits) -> Parse
         "text_chars": text_chars,
         "images": image_count,
         "ocr_pages": [entry["page"] for entry in result.ocr_queue],
+        "tables": len(result.tables),
     }
     return result
+
+
+def _clean_cell(value) -> str | None:
+    if value is None:
+        return None
+    text = " ".join(str(value).split())
+    return text or None
+
+
+def _add_tables(source: SourceFile, result: ParsedSource, page_count: int) -> None:
+    """Ruled tables per page (header = first row), as table records and evidence items."""
+    try:
+        import pdfplumber
+    except ImportError:
+        result.warnings.append("未安装 pdfplumber，PDF 表格未抽取")
+        return
+    try:
+        document = pdfplumber.open(str(source.path))
+    except Exception as exc:  # noqa: BLE001 - pypdf already read the file; tables are best effort
+        result.warnings.append(f"PDF 表格抽取失败：{exc}")
+        return
+    with document:
+        for number, page in enumerate(document.pages[:page_count], 1):
+            try:
+                tables = page.extract_tables({"vertical_strategy": "lines", "horizontal_strategy": "lines"})
+            except Exception as exc:  # noqa: BLE001
+                result.warnings.append(f"第 {number} 页表格抽取失败：{exc}")
+                continue
+            index = 0
+            for raw in tables:
+                rows = [[_clean_cell(cell) for cell in row] for row in raw]
+                rows = [row for row in rows if any(cell is not None for cell in row)]
+                if len(rows) < 2 or max(len(row) for row in rows) < 2:
+                    continue
+                index += 1
+                location = f"page {number} table {index}"
+                record = table_record(source, f"p{number:03d}-t{index:02d}", rows, location=location,
+                                      extra={"page": number, "extraction": "pdfplumber_lines"})
+                result.tables.append(record)
+                result.items.append(table_item(source, record, page=number))

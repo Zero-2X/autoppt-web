@@ -331,7 +331,9 @@ draft → estimated → paid(积分冻结) → queued → intake → planning
   - [x] `job_request.py`：`autoppt-job-request-v1` 的 JSON Schema 和校验（§3.3 规则：无文档时描述 ≥200 字、页数 ≤30、原生版强制 CP3 与 Office 字体、深色/极简须主动选择、Logo 须确认权属）
   - [x] `intake.py`：根据需求和文件生成主题目录：`source-materials/`、`workspace/evidence_workspace/`（source manifest、`evidence-ledger.json`、图表数据）、`workspace/presentation_handoff/planning-brief.{json,md}`；任务目录不能放在两个仓库内；上传被拒时进入 `blocked`，替换后可重跑
   - [x] 新增解析器（`parsers/`）：PDF、PPTX、DOCX（复用原仓库抽取器）、XLSX/CSV、MD/TXT/TEX、图片、ZIP（防路径穿越和压缩炸弹）；输出统一的 source manifest 和证据条目
-    - [ ] OCR 本身未实现：无文字层的 PDF 页只进入 `ocr_queue`；HEIC 需要先转码；PDF 表格未抽取
+    - [x] 扫描页 OCR（`parsers/ocr_pages.py`）：无文字层的 PDF 页用 pypdfium2 渲染（宽 1800 px）后由 Worker 的 Windows OCR 读取，成为 `extraction: ocr`、风险等级 medium 的证据条目（数字拆分如“0 · 1 7”合并为 0.17）；读不出的页仍列在简报的 `ocr_pending_pages`；mock 和非 Windows 不跑 OCR
+    - [x] PDF 表格：pdfplumber 只按表格线识别（不把分栏正文当表格），进入 `chart-data.json`
+    - [x] HEIC/HEIF：pillow-heif 解码后转成 PNG 素材（PowerPoint 不认 HEIC）
   - [x] `status.py`：代理写 `service/status.json`（阶段、进度、当前页、警告、blocked 原因），Worker 用 `StatusWatcher` 监听；Worker 自己维护 `service/job-state.json`（§5 状态机，按档位和检查点生成阶段计划，校验每次转移）
   - [x] `checkpoint.py`：代理写 `service/checkpoint.json` 后停止；用户回答写 `service/checkpoint-response.json`（CP3 只能由用户本人回答且必须附原话和所看预览；CP2 重做须列页码；超出免费轮次须确认扣费）；回答后归档到 `service/checkpoints/<id>/`
   - [x] `previews.py`：缩略图、联系表、母版与成品并排对比图、差异热图和差异指标（只读已有图片，不渲染；指标仅供参考，不作门禁）
@@ -468,7 +470,7 @@ CP3 管理员不能代批）、取消、系统失败退款、可重试失败退�
         页码、上传哈希和母版哈希，标注“不是 ImageGen 产物”；验收记录使用单独的层级名 `user-supplied-master-native-approved`
   - [ ] `SKILL.md` 和门禁脚本：原仓库不能修改（用户要求），D3 也未拍板；在此之前工作流的 ImageGen-first 门禁不认这类母版
 - [x] 输入归一化：PPTX 用 PowerPoint 渲染（调用原仓库 `render_pptx_powerpoint.ps1`，只读使用，同一时间只跑一个 Office 任务），
-      PDF 栅格化（优先 pypdfium2；没有时用 PyMuPDF，**PyMuPDF 是 AGPL 许可，商用前需评估**），图片统一为 RGB PNG，宽度 1920
+      PDF 栅格化（pypdfium2，已列入依赖；没有时才用 PyMuPDF，**PyMuPDF 是 AGPL 许可，商用前需评估**），图片统一为 RGB PNG，宽度 1920
   - 2026-10-17 本机实测：2 页中文 PPTX，PowerPoint 渲染 7.1 秒（1920×1080），Windows OCR 1.7 秒，文字全部识别正确
 - [x] OCR 后进入 CP-V 文字核对，生成已审核的精确文字清单（Windows OCR，`windows_ocr_layout.ps1`；
       中文逐字空格已合并；用户逐行改正、删除、补充；`reviewed-text.json` 之后不再被 OCR 覆盖）

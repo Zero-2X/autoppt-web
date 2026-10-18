@@ -1,7 +1,8 @@
 """PNG / JPG / WebP / HEIC uploads: verify, measure, and register as assets.
 
-HEIC/HEIF needs transcoding first; it is decoded only if ``pillow_heif`` is
-installed, otherwise the file is marked ``needs_transcode``.
+HEIC/HEIF (phone photos) is decoded with ``pillow_heif`` and transcoded to a
+PNG asset, because PowerPoint and the image tools downstream do not read HEIC;
+without ``pillow_heif`` the file is marked ``needs_transcode``.
 """
 
 from __future__ import annotations
@@ -71,7 +72,14 @@ def parse_image(source: SourceFile, work_dir: Path, limits: IntakeLimits) -> Par
     finally:
         Image.MAX_IMAGE_PIXELS = previous
 
-    asset = image_asset(source, "image", path, origin="upload", width=width, height=height, image_format=image_format)
+    origin = "upload"
+    if suffix in {".heic", ".heif"}:
+        transcoded = work_dir / "media" / source.file_id / "image.png"
+        transcoded.parent.mkdir(parents=True, exist_ok=True)
+        with Image.open(path) as image:
+            image.save(transcoded, "PNG")
+        path, origin, image_format = transcoded, f"upload ({image_format} transcoded to PNG)", "PNG"
+    asset = image_asset(source, "image", path, origin=origin, width=width, height=height, image_format=image_format)
     result.assets.append(asset)
     result.items.append(
         make_item(

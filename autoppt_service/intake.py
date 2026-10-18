@@ -22,7 +22,7 @@ import re
 import shutil
 import sys
 from pathlib import Path, PurePath
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from autoppt_service.export_options import DOCUMENT_ROLES, FILE_ROLES
 from autoppt_service.job_request import validate_job_request
@@ -167,7 +167,9 @@ def _planning_brief(job_id: str, request: dict[str, Any], derived: dict[str, Any
             "chart_data": f"{EVIDENCE_DIR}/chart-data.json",
             "items": len(manifest["evidence_items"]),
             "documents": [fid for fid, role in roles.items() if role in DOCUMENT_ROLES],
-            "ocr_pending_pages": manifest["ocr_queue"],
+            "ocr_pending_pages": [e for e in manifest["ocr_queue"] if e.get("status") != "ocr_done"],
+            "ocr_read_pages": [{"file_id": e["file_id"], "page": e["page"]} for e in manifest["ocr_queue"]
+                               if e.get("status") == "ocr_done"],
         },
         "rules": PLANNING_RULES,
     }
@@ -235,8 +237,11 @@ def run_intake(
     job_id: str,
     limits: IntakeLimits | None = None,
     protected_roots: Sequence[Path] | None = None,
+    ocr: Callable[[Path, Path], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Run intake; return the intake report (also written to ``service/intake-report.json``)."""
+    """Run intake; return the intake report (also written to ``service/intake-report.json``).
+
+    With ``ocr``, PDF pages without a text layer are read and become OCR evidence items."""
     job_dir = Path(job_dir)
     limits = limits or IntakeLimits()
     _check_job_dir(job_dir, _protected_roots() if protected_roots is None else protected_roots)
@@ -286,6 +291,10 @@ def run_intake(
         limits=limits,
         description=normalized["inputs"]["description"],
     )
+    if manifest["ocr_queue"] and ocr is not None:
+        from autoppt_service.parsers.ocr_pages import ocr_queued_pages
+
+        ocr_queued_pages(manifest, job_dir / INTAKE_DIR / "ocr", ocr=ocr, limits=limits)
     _relativize(manifest, job_dir)
     evidence_dir = job_dir / EVIDENCE_DIR
     write_json_atomic(evidence_dir / "source-manifest.json", manifest)
@@ -315,8 +324,14 @@ def run_intake(
         if record["status"] == "rejected" and record not in rejected:
             warnings.append(f"{record['name']}: {record.get('error', {}).get('message', 'rejected')}")
         warnings += [f"{record['name']}: {w}" for w in record["warnings"]]
-    if manifest["ocr_queue"]:
-        warnings.append(f"{len(manifest['ocr_queue'])} 页 PDF 没有文字层，需要 OCR 后才能作为证据")
+    read = [entry for entry in manifest["ocr_queue"] if entry.get("status") == "ocr_done"]
+    if read:
+        warnings.append(f"{len(read)} 页 PDF 扫描页的文字来自 OCR，使用前请核对数字和专有名词")
+    unread = len(manifest["ocr_queue"]) - len(read)
+    if unread and ocr is None:
+        warnings.append(f"{unread} 页 PDF 没有文字层，需要 OCR 后才能作为证据")
+    elif unread:
+        warnings.append(f"{unread} 页 PDF 没有文字层且 OCR 未读出文字，不能作为证据")
     if extra:
         warnings.append(f"忽略了请求中未登记的上传：{', '.join(extra)}")
 

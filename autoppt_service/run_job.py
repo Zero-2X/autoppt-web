@@ -242,8 +242,11 @@ def phase_intake(
     job_dir: Path, *, job_id: str, request: dict[str, Any], uploads: dict[str, str], mock: bool = False,
     vectorize_runners: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    ocr = (vectorize_runners or {}).get("ocr")
+    if ocr is None and not mock and os.name == "nt":
+        from autoppt_service.vectorize import windows_ocr as ocr  # noqa: N813 - scanned PDF pages
     with phase_timer(job_dir, "intake"):
-        report = run_intake(request, uploads, job_dir, job_id=job_id)
+        report = run_intake(request, uploads, job_dir, job_id=job_id, ocr=ocr)
         state = load_job_state(job_dir)
         if state and state["state"] == "cp_v_text":
             _prepare_vectorize(job_dir, state, mock=mock, runners=vectorize_runners or {})
