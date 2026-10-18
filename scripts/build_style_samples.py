@@ -84,6 +84,10 @@ def main(argv: list[str] | None = None) -> int:
                 image.thumbnail((1280, 1280))
                 image.save(args.out / f"{style}.jpg", quality=82, optimize=True, progressive=True)
             results[style]["sample"] = f"web/styles/{style}.jpg"
+            kinds_path = args.out / "samples.json"
+            kinds = json.loads(kinds_path.read_text(encoding="utf-8")) if kinds_path.exists() else {}
+            kinds[style] = {"kind": "imagegen", "source": f"scripts/build_style_samples.py ({job.name})"}
+            kinds_path.write_text(json.dumps(kinds, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(json.dumps({style: results[style]}, ensure_ascii=False), flush=True)
     (args.jobs_root / "style-samples-report.json").write_text(json.dumps(results, ensure_ascii=False, indent=2),
                                                                encoding="utf-8")

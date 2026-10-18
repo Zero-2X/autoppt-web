@@ -1,0 +1,26 @@
+{
+  "academic_light": {
+    "kind": "imagegen",
+    "source": "J-plan-real-001 S05 master (fictional test thesis)"
+  },
+  "academic_minimal": {
+    "kind": "schematic",
+    "source": "drawn from the style palette by scripts/build_style_previews.py"
+  },
+  "deep_academic": {
+    "kind": "schematic",
+    "source": "drawn from the style palette by scripts/build_style_previews.py"
+  },
+  "editorial_warm": {
+    "kind": "schematic",
+    "source": "drawn from the style palette by scripts/build_style_previews.py"
+  },
+  "engineering_blueprint": {
+    "kind": "schematic",
+    "source": "drawn from the style palette by scripts/build_style_previews.py"
+  },
+  "clinical_clean": {
+    "kind": "schematic",
+    "source": "drawn from the style palette by scripts/build_style_previews.py"
+  }
+}

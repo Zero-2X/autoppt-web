@@ -524,3 +524,11 @@ def test_orders_need_the_current_terms_when_a_version_is_configured(tmp_path):
     for name in ("terms", "privacy", "settlement"):
         page = client.get(f"/legal/{name}.md")
         assert page.status_code == 200 and "草案" in page.text
+
+
+def test_style_previews_say_whether_they_are_real_or_schematic(api):
+    styles = {s["id"]: s for s in api.get("/api/options").json()["styles"]}
+    assert all(s["sample_image"] == f"/styles/{sid}.jpg" for sid, s in styles.items())
+    assert styles["academic_light"]["sample_kind"] == "imagegen"  # a real master of the fictional thesis
+    assert {s["sample_kind"] for sid, s in styles.items() if sid != "academic_light"} == {"schematic"}
+    assert api.get("/styles/deep_academic.jpg").headers["content-type"] == "image/jpeg"

@@ -20,3 +20,4 @@ profiles.json
 
 # Gold sample set: fictional test material, committed so every template upgrade can be re-run (scripts/run_samples.py).
 !samples/**
+!web/styles/samples.json

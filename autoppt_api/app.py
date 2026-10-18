@@ -384,9 +384,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload = export_options()
         payload["terms_version"] = settings.terms_version or LEGAL_DRAFT_VERSION
         samples = Path(__file__).resolve().parents[1] / "web" / "styles"  # scripts/build_style_samples.py
+        kinds = json.loads((samples / "samples.json").read_text(encoding="utf-8")) if (samples / "samples.json").is_file() else {}
         for style in payload["styles"]:
             if (samples / f"{style['id']}.jpg").is_file():
                 style["sample_image"] = f"/styles/{style['id']}.jpg"
+                # "imagegen": a real master in this style; "schematic": drawn from the palette until image_gen returns
+                style["sample_kind"] = kinds.get(style["id"], {}).get("kind", "imagegen")
         return payload
 
     @app.get("/api/pricing")

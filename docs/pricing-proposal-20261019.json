@@ -1,0 +1,48 @@
+{
+  "rules": {
+    "provisional": true,
+    "base": 20,
+    "per_slide": {
+      "planning_package": 0,
+      "image_deck": 6,
+      "native_editable": 30
+    },
+    "vectorize_per_slide": 12,
+    "addons": {
+      "speaker_notes": 10,
+      "anticipated_questions": 10
+    },
+    "redo_slide": 6,
+    "extra_round": 5,
+    "free_rounds": 2,
+    "packages": [
+      {
+        "id": "p100",
+        "credits": 100,
+        "price_cents": 3000,
+        "label": "100 积分"
+      },
+      {
+        "id": "p300",
+        "credits": 300,
+        "price_cents": 8500,
+        "label": "300 积分"
+      },
+      {
+        "id": "p1000",
+        "credits": 1000,
+        "price_cents": 26000,
+        "label": "1000 积分"
+      }
+    ],
+    "credit_value_cents": 28,
+    "cost_rates": {
+      "input_per_million_cents": 0,
+      "cached_input_per_million_cents": 0,
+      "output_per_million_cents": 0,
+      "office_minute_cents": 5,
+      "storage_gb_month_cents": 15
+    }
+  },
+  "note": "2026-10-19 proposal from measured agent time (docs/p1-cost-table.md); CNY prices still provisional"
+}

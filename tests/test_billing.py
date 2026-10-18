@@ -249,3 +249,14 @@ def test_margin_report(api):
     report = api.get("/api/admin/reports/margin", headers=admin).json()
     assert report["jobs"] == [] and report["credit_value_cents"] == 28
     assert "office_minute_cents" in report["cost_rates"]
+
+
+def test_pricing_proposal_is_a_complete_rule_set(api):
+    import json
+    from pathlib import Path
+
+    proposal = json.loads((Path(__file__).resolve().parents[1] / "docs" / "pricing-proposal-20261019.json").read_text(encoding="utf-8"))
+    admin = login(api, "admin@example.com")
+    reply = api.put("/api/admin/pricing", json=proposal, headers=admin)
+    assert reply.status_code == 200, reply.text
+    assert api.get("/api/pricing").json()["rules"]["per_slide"]["native_editable"] == 30
