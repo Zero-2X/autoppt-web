@@ -24,6 +24,7 @@
    - 新的 MXC 后端（`windows.sandbox="mxc"`）在本机报 “native MXC is unavailable on this executor”。
    - 给 Codex 沙箱能力 SID（`~/.codex/cap_sid` 里的通用 workspace/readonly SID，以及该任务目录专属的 SID）加“拒绝读取”ACE：
      代理照样读得到（受限令牌的访问检查不靠这些 SID）。
+   - 桌面版 Codex 自带的 `0.163.0-alpha.10.2` 同样不行：`windows.sandbox="elevated"` 下三处金丝雀仍全部读得到（elevated 沙箱没有安装，它附带的 `codex-windows-sandbox-setup.exe` 只接受 Codex 内部的编码请求，且需要管理员）。同一版本下 `image_gen` 也仍不可用。
    - 可行的替代：**模型网关模式**（开发清单 P2，已实现）下 Worker 不再有 ChatGPT 登录凭证，任务令牌只在该阶段的环境变量里且
      Codex 不传给代理命令；加上专用 Worker 账号（读不到其他用户的文件）、一机一任务、阶段后删除本机副本，凭证与其他客户数据就不在
      代理可读的范围内。内测期仍用账号池时，这一项是已知残留风险。
