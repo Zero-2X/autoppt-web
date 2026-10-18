@@ -33,6 +33,8 @@ class Settings:
     admin_emails: tuple[str, ...] = field(
         default_factory=lambda: tuple(e.strip().lower() for e in _env("ADMIN_EMAILS", "").split(",") if e.strip())
     )
+    # Version of web/legal/terms.md users must accept when ordering; empty = not enforced (development).
+    terms_version: str = field(default_factory=lambda: _env("TERMS_VERSION", ""))
     smtp_url: str = field(default_factory=lambda: _env("SMTP_URL", ""))
     mail_sender: str = field(default_factory=lambda: _env("MAIL_SENDER", "AutoPPT <noreply@localhost>"))
     # SMS for phone login and notifications: "" logs only, "webhook" posts to the operator's signed relay.

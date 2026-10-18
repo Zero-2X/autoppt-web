@@ -1,0 +1,28 @@
+{
+  "schema_version": "autoppt-job-request-v1",
+  "service": "vectorize",
+  "inputs": {
+    "files": [
+      {
+        "file_id": "f_01",
+        "role": "vectorize_source",
+        "name": "旧版答辩稿.pptx"
+      }
+    ],
+    "description": "",
+    "must_include": [],
+    "must_avoid": []
+  },
+  "delivery": {
+    "tier": "native_editable",
+    "font_policy": "office_native_yahei"
+  },
+  "slides": {
+    "mode": "fixed",
+    "count": 3
+  },
+  "vectorize": {
+    "depth": "text_shapes",
+    "keep_photos_as_images": true
+  }
+}

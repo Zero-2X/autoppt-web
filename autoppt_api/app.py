@@ -140,8 +140,12 @@ class DraftBody(BaseModel):
     request: dict[str, Any]
 
 
+LEGAL_DRAFT_VERSION = "2026-10-19"  # web/legal/terms.md and privacy.md
+
+
 class SubmitBody(BaseModel):
     confirm_total: int
+    accepted_terms: str | None = Field(default=None, max_length=40)  # version of the user agreement accepted
 
 
 class ResponseBody(BaseModel):
@@ -378,6 +382,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/options")
     def options() -> dict[str, Any]:
         payload = export_options()
+        payload["terms_version"] = settings.terms_version or LEGAL_DRAFT_VERSION
         samples = Path(__file__).resolve().parents[1] / "web" / "styles"  # scripts/build_style_samples.py
         for style in payload["styles"]:
             if (samples / f"{style['id']}.jpg").is_file():
@@ -746,8 +751,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def submit(request: Request, job_id: str, body: SubmitBody, user: User = Depends(current_user), session: Session = Depends(db),
                idempotency_key: str | None = Header(default=None)):
         job = own_job(job_id, user, session, request)
-        return idempotent(session, f"submit:{user.id}", idempotency_key, body.model_dump(),
-                          lambda: job_view(session, submit_job(session, user, job, confirm_total=body.confirm_total)))
+        if settings.terms_version and body.accepted_terms != settings.terms_version:
+            raise HTTPException(422, f"accept the current user agreement (version {settings.terms_version}) to order")
+
+        def run() -> dict[str, Any]:
+            if body.accepted_terms:
+                audit(session, "user", user.id, "job.terms_accepted", job.id, version=body.accepted_terms)
+            return job_view(session, submit_job(session, user, job, confirm_total=body.confirm_total))
+
+        return idempotent(session, f"submit:{user.id}", idempotency_key, body.model_dump(), run)
 
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel(request: Request, job_id: str, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:

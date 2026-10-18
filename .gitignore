@@ -17,3 +17,6 @@ profiles.json
 # Public case-study images (fictional test sample) are part of the front end.
 !web/cases/**/*.jpg
 !web/styles/*.jpg
+
+# Gold sample set: fictional test material, committed so every template upgrade can be re-run (scripts/run_samples.py).
+!samples/**

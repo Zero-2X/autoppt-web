@@ -501,3 +501,26 @@ def test_admin_refunds_settled_credits_of_one_job(api, world):
     statement = credits(api, user)["statement"]
     assert statement[0]["kind"] == "refund"
     ledger_ok(api)
+
+
+def test_orders_need_the_current_terms_when_a_version_is_configured(tmp_path):
+    settings = Settings(database_url=f"sqlite:///{(tmp_path / 'api.db').as_posix()}", storage_dir=tmp_path / "storage",
+                        dev_echo_codes=True, admin_emails=("admin@example.com",), terms_version="2026-10-19")
+    client = TestClient(create_app(settings))
+    client.tmp = tmp_path
+    admin, user = login(client, "admin@example.com"), login(client, "student@example.com")
+    client.post("/api/admin/credits/adjust", json={"email": "student@example.com", "credits": 500, "memo": "t"},
+                headers={**admin, "Idempotency-Key": "t1"})
+    sha = upload(client, user, "论文.docx", docx_bytes())
+    job = client.post("/api/jobs", json={"request": request_body(sha)}, headers=user).json()
+    total = client.post(f"/api/jobs/{job['id']}/estimate", headers=user).json()["total"]
+    url = f"/api/jobs/{job['id']}/submit"
+    assert client.get("/api/options").json()["terms_version"] == "2026-10-19"
+    assert client.post(url, json={"confirm_total": total}, headers=user).status_code == 422
+    assert client.post(url, json={"confirm_total": total, "accepted_terms": "2025-01-01"}, headers=user).status_code == 422
+    assert client.post(url, json={"confirm_total": total, "accepted_terms": "2026-10-19"}, headers=user).status_code == 200
+    audit = client.get("/api/admin/audit", headers=admin).json()
+    assert [a["data"]["version"] for a in audit if a["action"] == "job.terms_accepted"] == ["2026-10-19"]
+    for name in ("terms", "privacy", "settlement"):
+        page = client.get(f"/legal/{name}.md")
+        assert page.status_code == 200 and "草案" in page.text

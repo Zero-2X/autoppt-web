@@ -300,3 +300,20 @@ def test_cli(tmp_path, capsysbinary):
     assert main(["--schema"]) == 0
     schema = json.loads(capsysbinary.readouterr().out.decode("utf-8").split("\n}\n")[-2] + "\n}")
     assert schema["properties"]["schema_version"]["const"] == SCHEMA_VERSION
+
+
+def test_gold_samples_are_valid_requests_with_their_files():
+    import json
+    from pathlib import Path
+
+    from autoppt_service.job_request import validate_job_request
+
+    root = Path(__file__).resolve().parents[1] / "samples"
+    samples = sorted(p for p in root.iterdir() if p.is_dir())
+    assert len(samples) == 5
+    for sample in samples:
+        request = json.loads((sample / "request.json").read_text(encoding="utf-8-sig"))
+        result = validate_job_request(request)
+        assert result.ok, (sample.name, result.errors)
+        for entry in request["inputs"].get("files", []):
+            assert (sample / entry["name"]).is_file(), (sample.name, entry["name"])

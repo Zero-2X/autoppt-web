@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -675,6 +676,24 @@ def _build_image_deck_with_repo(job_dir: Path, output: Path) -> None:
         raise PhaseError(f"build_image_deck.py failed: {completed.stderr.strip()[-1000:]}")
 
 
+def _label_decks(job_dir: Path, job_id: str, decks: list[Path]) -> list[dict[str, Any]]:
+    """Write the implicit AIGC label into each delivered deck and record exactly what changed."""
+    from autoppt_service.aigc_label import CHANGED_PARTS, changed_parts, label_pptx
+
+    records = []
+    for deck in decks:
+        before = deck.with_name(deck.stem + ".before-aigc-label.pptx")
+        shutil.copyfile(deck, before)
+        written = label_pptx(deck, f"{job_id}:{deck.name}")
+        changed = changed_parts(before, deck)
+        if set(changed) - set(CHANGED_PARTS):
+            raise PhaseError(f"AIGC label changed more than metadata in {deck.name}: {changed}")
+        records.append({"path": relative_to_job(job_dir, deck), "label": written, "sha256_before_label": sha256_file(before),
+                        "changed_parts": changed})
+        before.unlink()
+    return records
+
+
 def _user_master_gate(job_dir: Path, state: dict[str, Any], phase: str) -> dict[str, Any] | None:
     """Vectorization only: the user-supplied masters must still be the pages the user uploaded (D3)."""
     request = read_json(service_path(job_dir, "job-request.json")) or {}
@@ -748,6 +767,7 @@ def phase_package(job_dir: Path, *, job_id: str, mock: bool) -> dict[str, Any]:
             state = transition(state, "blocked", reason="missing deliverables: " + ", ".join(relative_to_job(job_dir, p) for p in missing))
             save_job_state(job_dir, state)
             return {"phase": "package", "job_state": state["state"]}
+        aigc = _label_decks(job_dir, job_id, [path for path in files if path.suffix == ".pptx"])
         manifest = {
             "schema_version": "autoppt-delivery-manifest-v1",
             "job_id": job_id,
@@ -759,6 +779,8 @@ def phase_package(job_dir: Path, *, job_id: str, mock: bool) -> dict[str, Any]:
                 "原生可编辑版与母版之间存在经用户确认接受的字体和局部图形差异；不承诺逐像素一致。" if tier == "native_editable" else ""
             ),
             "files": [{"path": relative_to_job(job_dir, path), "sha256": sha256_file(path)} for path in files],
+            # 生成合成内容标识: every deliverable here is AI-generated (vectorize decks are AI-rebuilt).
+            "aigc": {"label": "1", "notice": "本交付物由人工智能生成或重建（AIGC）", "pptx_labels": aigc},
         }
         write_json_atomic(job_dir / OUTPUT_DIR / "delivery-manifest.json", manifest)
         bundle = job_dir / OUTPUT_DIR / f"{job_id}{'-MOCK' if mock else ''}.zip"

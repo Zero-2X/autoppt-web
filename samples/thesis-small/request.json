@@ -1,0 +1,44 @@
+{
+  "schema_version": "autoppt-job-request-v1",
+  "service": "new_deck",
+  "inputs": {
+    "files": [
+      {
+        "file_id": "f_01",
+        "role": "primary_source",
+        "name": "论文终稿_示例.docx"
+      }
+    ],
+    "description": "硕士论文答辩，重点讲清研究问题、方法的三步结构、对比实验结果和本人贡献，局限要如实说明。",
+    "must_include": [
+      "本人贡献单独一页"
+    ],
+    "must_avoid": [
+      "把回放仿真结果写成实测结果"
+    ]
+  },
+  "scenario": "thesis_defense",
+  "audience": "答辩委员会",
+  "language": "zh-CN",
+  "slides": {
+    "mode": "range",
+    "min": 8,
+    "max": 10,
+    "talk_minutes": 10
+  },
+  "style": {
+    "profile": "academic_light",
+    "density": "medium_high"
+  },
+  "cover": {
+    "title": "基于多源数据融合的城市内涝短临预警方法研究",
+    "author": "示例学生",
+    "advisor": "示例导师",
+    "date": "2027-05"
+  },
+  "delivery": {
+    "tier": "native_editable",
+    "font_policy": "office_native_yahei",
+    "charts": "native_with_workbook"
+  }
+}

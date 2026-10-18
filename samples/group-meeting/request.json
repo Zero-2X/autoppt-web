@@ -1,0 +1,33 @@
+{
+  "schema_version": "autoppt-job-request-v1",
+  "service": "new_deck",
+  "inputs": {
+    "files": [
+      {
+        "file_id": "f_01",
+        "role": "primary_source",
+        "name": "本周进展.md"
+      },
+      {
+        "file_id": "f_02",
+        "role": "chart_data",
+        "name": "实验结果.xlsx"
+      }
+    ],
+    "description": "组会汇报，讲本周完成边界和下一步，不要夸大预实验。",
+    "must_include": [],
+    "must_avoid": []
+  },
+  "delivery": {
+    "tier": "native_editable",
+    "font_policy": "office_native_yahei"
+  },
+  "scenario": "research_progress_report",
+  "slides": {
+    "mode": "fixed",
+    "count": 7
+  },
+  "cover": {
+    "title": "小类识别实验进展"
+  }
+}

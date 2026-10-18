@@ -311,7 +311,7 @@ draft → estimated → paid(积分冻结) → queued → intake → planning
 
 ### P0 决策与合规（开工前）
 
-- [ ] 拍板 D1–D7（见第 2 节），并写进 `docs/decisions.md`（D1、D2 已定，其余待定）
+- [x] 拍板 D1–D7，并写进 `docs/decisions.md`（D1、D2 用户 2026-10-16 定；D3–D7 由 Claude 按用户授权于 2026-10-19 定稿，用户可推翻）
 - [x] 实测 `codex exec` 无人值守调用内置 `image_gen` 并产出可校验来源（ChatGPT 账号登录，2026-10-17 通过，见 [实测记录](p0-codex-imagegen-probe.md)）
 - [ ] 用多个真实账号（各自一个 `CODEX_HOME`）验证轮换和限额切换
 - [ ] 对外商用前：重新评估账号池条款风险，必要时改用 API key 并实测 API key 鉴权下的 `image_gen`

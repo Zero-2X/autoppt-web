@@ -117,6 +117,7 @@ def test_order_review_and_download_in_a_real_browser(live):
         page.get_by_label("标题", exact=True).fill("城市内涝预警研究")
         page.get_by_text("接受用 Office 字体").click()
         page.get_by_role("button", name="下一步", exact=True).click()
+        page.locator("label.check:has-text('我已阅读并同意') input").check()
         submit = page.get_by_role("button", name="确认下单")
         submit.wait_for()
         assert "244" in submit.inner_text()

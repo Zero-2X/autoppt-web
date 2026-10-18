@@ -121,6 +121,8 @@ async function renderNav() {
   nav.append(h("button", { class: "link", onclick: () => { setLang(lang() === "zh" ? "en" : "zh"); route(); } }, t("language")));
   fill(document.getElementById("footer"), 
     h("span", {}, tr("AutoPPT · 内容准确性由用户最终负责；原生可编辑版不承诺与母版逐像素一致。", "AutoPPT · You are responsible for the accuracy of the content; the native editable deck is not pixel-identical to its masters.")),
+    h("span", { class: "legal-links" }, h("a", { href: "#/terms" }, tr("用户协议", "Terms")), " · ",
+      h("a", { href: "#/privacy" }, tr("隐私政策", "Privacy")), " · ", h("a", { href: "#/settlement" }, tr("积分结算规则", "Credit rules"))),
   );
 }
 
@@ -128,6 +130,7 @@ const ROUTES = [
   [/^#?\/?$/, pageHome],
   [/^#\/pricing$/, pagePricing],
   [/^#\/cases$/, pageCases],
+  [/^#\/(terms|privacy|settlement)$/, pageLegal],
   [/^#\/login(?:\?.*)?$/, pageLogin],
   [/^#\/new$/, pageNewJob],
   [/^#\/jobs$/, pageJobs],
@@ -145,7 +148,7 @@ async function route() {
   for (const [pattern, page] of ROUTES) {
     const match = hash.match(pattern);
     if (!match) continue;
-    const needsLogin = ![pageHome, pagePricing, pageCases, pageLogin].includes(page);
+    const needsLogin = ![pageHome, pagePricing, pageCases, pageLegal, pageLogin].includes(page);
     if (needsLogin && !auth.loggedIn()) { location.hash = "#/login"; return; }
     fill(view(), h("p", { class: "muted" }, t("loading")));
     try {
@@ -178,6 +181,14 @@ const CASE_SLIDES = [
     zh: "S08 本人贡献：母版里的“不同模型设置的预警效果对比”柱状图是 ImageGen 画的示意，资料里没有数据。现在母版审核会把这类无数据来源的图表单独报出来。",
     en: "S08 contribution: the master’s ablation bar chart was drawn by ImageGen with no data in the sources. Master review now flags charts like this one." },
 ];
+
+async function pageLegal(name) {
+  const response = await fetch(`/legal/${name}.md`);
+  const text = response.ok ? await response.text() : "";
+  return card(tr({ terms: "用户协议", privacy: "隐私政策", settlement: "积分结算规则" }[name], { terms: "Terms of service", privacy: "Privacy policy", settlement: "Credit rules" }[name]),
+    lang() === "en" ? notice("The legal texts are in Chinese (drafts pending legal review).", "info") : null,
+    markdownView(text));
+}
 
 async function pageCases() {
   const base = "/cases/j-plan-real-001/";
@@ -523,6 +534,7 @@ async function pageNewJob() {
 
   function stepEstimate() {
     const box = h("div", { class: "stack" }, h("p", { class: "muted" }, t("loading")));
+    const terms = h("input", { type: "checkbox" });
     (async () => {
       try {
         const request = buildRequest(w);
@@ -539,12 +551,17 @@ async function pageNewJob() {
           quote.warnings.length ? h("div", { class: "notice warn" }, quote.warnings.map((x) => h("div", {}, x.message))) : null,
           quote.derived.content_notice ? notice(quote.derived.content_notice, "warn") : null,
           h("p", { class: "muted" }, tierText(w.tier)),
+          h("label", { class: "check" }, terms, tr("我已阅读并同意", "I have read and accept the "),
+            h("a", { href: "#/terms", target: "_blank" }, tr("《用户协议》", "Terms")), tr("、", ", "),
+            h("a", { href: "#/privacy", target: "_blank" }, tr("《隐私政策》", "Privacy policy")), tr("和", " and "),
+            h("a", { href: "#/settlement", target: "_blank" }, tr("《积分结算规则》", "credit rules"))),
           h("div", { class: "row end" },
             h("button", { onclick: () => set({ step: 4 }, true) }, t("back")),
             h("button", { class: "primary", disabled: credits.available < quote.total, onclick: async (e) => {
+              if (!terms.checked) { box.append(errorBox(new Error(tr("请先阅读并同意用户协议和隐私政策", "Please accept the terms and the privacy policy first")))); return; }
               e.target.disabled = true;
               try {
-                await api.post(`/api/jobs/${job.id}/submit`, { confirm_total: quote.total }, { "Idempotency-Key": `submit-${job.id}` });
+                await api.post(`/api/jobs/${job.id}/submit`, { confirm_total: quote.total, accepted_terms: opts.terms_version }, { "Idempotency-Key": `submit-${job.id}` });
                 sessionStorage.removeItem(DRAFT_KEY);
                 me = null;
                 location.hash = `#/jobs/${job.id}`;
@@ -634,7 +651,9 @@ async function pageJob(jobId) {
     const parts = [head];
     if (job.open_checkpoint) parts.push(await reviewPanel(job, draw));
     if (job.deliverables.length) parts.push(card(t("deliverables"), h("ul", { class: "downloads" }, job.deliverables.map((d) =>
-      h("li", {}, h("a", { href: d.url, download: "" }, d.path.split("/").pop()), h("small", { class: "muted" }, ` ${(d.size / 1024).toFixed(0)} KB`))))));
+      h("li", {}, h("a", { href: d.url, download: "" }, d.path.split("/").pop()), h("small", { class: "muted" }, ` ${(d.size / 1024).toFixed(0)} KB`)))),
+      notice(tr("以上文件由人工智能生成或重建（AIGC），PPTX 的文件属性里带有生成合成内容标识，请勿删除；使用时请遵守所在学校或单位关于 AI 工具的规定。",
+        "These files were generated or rebuilt by AI (AIGC). The PPTX properties carry the AI-content label required by law; do not remove it, and follow your institution's rules on AI tools."), "info")));
     parts.push(card(t("events"), timeline));
     fill(root, ...parts);
     return job;

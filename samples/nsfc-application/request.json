@@ -1,0 +1,30 @@
+{
+  "schema_version": "autoppt-job-request-v1",
+  "service": "new_deck",
+  "inputs": {
+    "files": [
+      {
+        "file_id": "f_01",
+        "role": "primary_source",
+        "name": "申请书节选.docx"
+      }
+    ],
+    "description": "国自然面上项目答辩，重点讲清科学问题、技术路线和可行性。",
+    "must_include": [],
+    "must_avoid": [
+      "把计划写成已完成成果"
+    ]
+  },
+  "delivery": {
+    "tier": "planning_package"
+  },
+  "scenario": "nsfc_application_defense",
+  "slides": {
+    "mode": "range",
+    "min": 10,
+    "max": 12
+  },
+  "cover": {
+    "title": "面向复杂地形的滑坡早期识别机理研究"
+  }
+}
