@@ -504,13 +504,18 @@ def phase_masters(job_dir: Path, *, mock: bool, profiles_path: Path | None = Non
         masters = {sid: path for sid, path in discover_slides(job_dir / MASTERS_DIR).items()}
         findings: list[str] = []
         if not mock and os.name == "nt":
-            from autoppt_service.master_qa import check_master_numbers
+            from autoppt_service.master_qa import check_master_charts, check_master_numbers, ocr_masters
             from autoppt_service.vectorize import VectorizeError, windows_ocr
 
             try:
-                findings = check_master_numbers(job_dir, masters, ocr=windows_ocr)
+                results = ocr_masters(job_dir, masters, ocr=windows_ocr)
+                findings = check_master_numbers(job_dir, masters, ocr=windows_ocr, results=results)
             except (VectorizeError, OSError, ValueError) as exc:
-                findings = [f"number check on masters did not run: {exc}"]
+                results, findings = None, [f"number check on masters did not run: {exc}"]
+            try:  # report-only, like the number check: ImageGen charts without a chart-data table
+                findings += check_master_charts(job_dir, masters, ocr=windows_ocr, results=results)
+            except (VectorizeError, OSError, ValueError) as exc:
+                findings.append(f"chart check on masters did not run: {exc}")
         state = _masters_checkpoint(job_dir, state, masters, mock=mock, findings=findings)
     return {"phase": "masters", "job_state": state["state"], "masters": len(masters)}
 
