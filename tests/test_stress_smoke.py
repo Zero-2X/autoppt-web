@@ -27,3 +27,4 @@ def test_short_soak_keeps_the_ledger_and_queue_healthy(tmp_path):
     assert report["errors"] == [] and code == 0, report["errors"]
     assert report["final_ledger_ok"] and report["ledger_ok_every_check"]
     assert report["counts"].get("delivered", 0) >= 5 and report["jobs_not_final"] == []
+    assert report["temp_dir_exists"]  # overlapping phases must not leave TEMP on a deleted job folder

@@ -60,6 +60,39 @@ def disk_ok(path: Path, min_free_gb: float) -> tuple[bool, float]:
     return free >= min_free_gb, free
 
 
+# TEMP/TMP point at the running phase's own folder so Office and Codex leave their scratch files in the job.
+# They are process-wide: with several phases in one process (the soak test runs three workers), saving and
+# restoring per phase raced and left TEMP on a deleted job folder, after which SQLite could not create temp
+# files ("unable to open database file", 2026-10-18).  Active phases are tracked under a lock instead.
+_temp_lock = threading.Lock()
+_active_temps: list[Path] = []
+_original_temp: dict[str, str | None] = {}
+
+
+def _point_temp(path: Path | None) -> None:
+    for key in ("TEMP", "TMP"):
+        value = str(path) if path is not None else _original_temp.get(key)
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def _enter_temp(temp: Path) -> None:
+    with _temp_lock:
+        if not _active_temps:
+            _original_temp.update({key: os.environ.get(key) for key in ("TEMP", "TMP")})
+        _active_temps.append(temp)
+        _point_temp(temp)
+
+
+def _leave_temp(temp: Path) -> None:
+    with _temp_lock:
+        if temp in _active_temps:
+            _active_temps.remove(temp)
+        _point_temp(_active_temps[-1] if _active_temps else None)
+
+
 @contextmanager
 def guarded_phase(job_dir: Path, *, timeout_s: float, report: dict | None = None) -> Iterator[dict]:
     """Run a phase under the watchdog; ``report`` collects what the watchdog did."""
@@ -67,8 +100,7 @@ def guarded_phase(job_dir: Path, *, timeout_s: float, report: dict | None = None
     report.setdefault("killed", [])
     temp = Path(job_dir) / "tmp"
     temp.mkdir(parents=True, exist_ok=True)
-    saved = {key: os.environ.get(key) for key in ("TEMP", "TMP")}
-    os.environ["TEMP"] = os.environ["TMP"] = str(temp)
+    _enter_temp(temp)
     started = time.time()
     fired = threading.Event()
 
@@ -86,9 +118,5 @@ def guarded_phase(job_dir: Path, *, timeout_s: float, report: dict | None = None
     finally:
         timer.cancel()
         report["killed"] += kill_processes(office_processes(started))  # leftovers from this phase only
-        for key, value in saved.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+        _leave_temp(temp)
         shutil.rmtree(temp, ignore_errors=True)

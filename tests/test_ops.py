@@ -220,3 +220,18 @@ def test_worker_firewall_plan_and_refusal():
     assert "127.0.0.1" in allowed["remote_address"].split(",")
     refused = run("-Apply")  # an unresolvable host is refused before any rule is touched
     assert refused.returncode != 0 and "cannot resolve example.invalid" in refused.stderr + refused.stdout
+
+
+def test_overlapping_phases_restore_temp_to_a_folder_that_exists(tmp_path, monkeypatch):
+    # Three workers in one process (the soak test): phases start and end in any order.
+    monkeypatch.setenv("TEMP", str(tmp_path / "original"))
+    monkeypatch.setenv("TMP", str(tmp_path / "original"))
+    a = watchdog.guarded_phase(tmp_path / "job-a", timeout_s=60)
+    b = watchdog.guarded_phase(tmp_path / "job-b", timeout_s=60)
+    a.__enter__()
+    b.__enter__()
+    assert os.environ["TEMP"] == str(tmp_path / "job-b" / "tmp")
+    a.__exit__(None, None, None)  # A ends first: TEMP stays on B's live folder, never on A's deleted one
+    assert os.environ["TEMP"] == str(tmp_path / "job-b" / "tmp") and (tmp_path / "job-b" / "tmp").is_dir()
+    b.__exit__(None, None, None)
+    assert os.environ["TEMP"] == os.environ["TMP"] == str(tmp_path / "original")

@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import random
 import socket
 import sys
@@ -288,10 +289,12 @@ def main(argv: list[str] | None = None) -> int:
         "stuck_alerts_seen": stuck_alerts,
         "users_not_drained": undrained,
         "jobs_not_final": sorted({job["state"] for job in jobs if job["state"] not in FINAL_STATES}),
+        # Overlapping worker phases once left TEMP on a deleted job folder (SQLite then failed to make temp files).
+        "temp_dir_exists": Path(os.environ.get("TEMP") or tempfile.gettempdir()).is_dir(),
         "checks": checks,
     }
     ok = (report["final_ledger_ok"] and report["ledger_ok_every_check"] and not stuck_alerts and not undrained
-          and not report["jobs_not_final"] and not stats.counts.get("errors"))
+          and not report["jobs_not_final"] and not stats.counts.get("errors") and report["temp_dir_exists"])
     report["ok"] = ok
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.out:
