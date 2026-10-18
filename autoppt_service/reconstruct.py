@@ -374,6 +374,7 @@ def run_reconstruct_agent(
     ocr: Callable[[Path, Path], dict[str, Any]] | None = None,
     initial_issues: Sequence[str] = (),
     recheck_existing: bool = False,
+    review_issues: Sequence[str] = (),
 ) -> dict[str, Any]:
     budgets = {**DEFAULT_BUDGETS, **(budgets or {})}
     if ocr is None and __import__("os").name == "nt":
@@ -449,7 +450,10 @@ def run_reconstruct_agent(
         write_json_atomic(service_path(job_dir, "reconstruct-report.json"), report)
         return {**report, "renders": {sid: str(path) for sid, path in renders.items()}}
 
-    if recheck_existing and (job_dir / DECK).is_file():
+    # Findings from a review of the renders (a withdrawn preview) cannot be checked by the audit; they go
+    # with every session of this run and are never settled by a Worker re-check alone.
+    review = [issue for issue in review_issues if issue not in issues]
+    if recheck_existing and not review and (job_dir / DECK).is_file():
         # Attempt 0: a resumed job whose remaining problem the Worker fixes itself costs no agent session.
         outcome: dict[str, Any] = {"attempt": 0, "profile": None, "thread_id": None, "ok": True, "worker_recheck": True}
         attempts.append(outcome)
@@ -464,7 +468,7 @@ def run_reconstruct_agent(
         write_job_agents(job_dir, template, job_id=job_id, budgets=budgets)
         service_path(job_dir, "status.json").unlink(missing_ok=True)
         result = run_codex_exec(
-            build_agent_prompt(job_id, round_no, revision=revision, issues=issues),
+            build_agent_prompt(job_id, round_no, revision=revision, issues=[*issues, *review]),
             cwd=job_dir,
             profile=profile,
             run_dir=_unique_run_dir(service_path(job_dir, "codex-runs"), f"reconstruct-r{round_no}-a{attempt}"),

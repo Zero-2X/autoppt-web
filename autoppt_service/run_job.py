@@ -528,13 +528,18 @@ def _real_reconstruct(
     previous = _last_response(job_dir, "native_preview")
     # Only the user's own words are passed as user feedback; a withdrawn preview passes its audit errors.
     revision = previous if previous and previous["decision"] == "revise" and previous.get("responder") == "user" else None
-    initial_issues = previous.get("audit_errors", []) if previous and previous["decision"] == "withdrawn" else []
+    # A withdrawn preview's findings (Worker audit or a review of the renders) stay with every session
+    # until a new preview is opened.
+    review_issues = previous.get("audit_errors", []) if previous and previous["decision"] == "withdrawn" else []
+    initial_issues: list[str] = []
     carried = service_path(job_dir, "reconstruct-issues.json")
     recheck = False
     if carried.exists():
         # A blocked or deferred reconstruction continues from its latest audit, not older errors; the Worker
-        # first re-checks the deck on disk (its own repairs may already settle the remaining issues).
+        # first re-checks the deck on disk (its own repairs may settle the remaining issues) unless review
+        # findings are open, which only an agent session and the next preview can settle.
         initial_issues = read_json(carried).get("issues", [])
+        initial_issues = [issue for issue in initial_issues if issue not in review_issues]
         carried.unlink()
         recheck = True
     with phase_timer(job_dir, "reconstruct", round=round_no):
@@ -543,7 +548,7 @@ def _real_reconstruct(
                 job_dir, job_id=job_id, template=template, profiles=load_profiles(profiles_path),
                 renderer=renderer or powerpoint_renderer, round_no=round_no, revision=revision,
                 command=command, reasoning_effort=reasoning_effort, initial_issues=initial_issues,
-                recheck_existing=recheck,
+                recheck_existing=recheck, review_issues=review_issues,
             )
         except ReconstructDeferred as exc:
             if exc.issues:

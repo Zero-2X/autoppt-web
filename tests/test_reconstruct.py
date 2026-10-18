@@ -367,3 +367,20 @@ def test_small_visible_text_is_reread_on_an_upscaled_render(tmp_path):
 
     assert render_visibility_errors(renders, {"S05": [line]}, ocr=ocr, masters=masters, work_dir=tmp_path / "w") == []
     assert (tmp_path / "w" / "S05-render-2x.png").exists()
+
+
+def test_review_findings_are_never_settled_by_a_worker_recheck(job_at_reconstruct):
+    # 2026-10-18: CP3 r3 was withdrawn for a white box behind the S01 title, which no audit can see.
+    from autoppt_service.run_job import withdraw_native_preview
+
+    job = job_at_reconstruct["job"]
+    assert job_at_reconstruct["reconstruct"]()["job_state"] == "cp3_native_preview"
+    finding = "S01: a white box sits behind the title in the render"
+    withdraw_native_preview(job, [finding], reason="visual review")
+    write_json_atomic(service_path(job, "reconstruct-issues.json"), {"issues": [finding, "the previous session failed: x"]})
+    result = job_at_reconstruct["reconstruct"]()
+    assert result["job_state"] == "cp3_native_preview"
+    attempts = read_json(service_path(job, "reconstruct-report.json"))["attempts"]
+    assert attempts[0]["attempt"] == 1  # no Worker-only acceptance
+    prompts = sorted(job_at_reconstruct["home"].glob("prompt-*.txt"))
+    assert finding in prompts[-1].read_text(encoding="utf-8")

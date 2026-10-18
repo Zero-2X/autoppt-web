@@ -113,8 +113,8 @@ class ProfilePool:
         self._resting_until[profile.name] = time.monotonic() + self._cooldown_s
 
 
-# Measured 2026-10-18: an older CLI found on PATH (0.155.1) rejected the configured model with HTTP 400
-# and every session failed at once; the real runs used 0.163.0.
+# The real runs used 0.163.0; an unpinned run on 2026-10-18 picked up 0.155.1 from PATH.  (Its HTTP 400
+# "model not supported" turned out to be the account, not the CLI: see AUTOPPT_CODEX_MODEL.)
 MIN_CODEX_VERSION = (0, 163, 0)
 _checked_versions: dict[str, tuple[int, ...] | None] = {}
 
@@ -237,6 +237,10 @@ def run_codex_exec(
     run_dir.mkdir(parents=True, exist_ok=True)
     events_path = run_dir / "events.jsonl"
     last_message_path = run_dir / "last-message.txt"
+    if not exec_options.get("model") and os.getenv("AUTOPPT_CODEX_MODEL", "").strip():
+        # Measured 2026-10-18: the account stopped offering the model named in the shared config.toml
+        # (HTTP 400 "model is not supported"); the Worker pins a model per run instead of editing that file.
+        exec_options["model"] = os.environ["AUTOPPT_CODEX_MODEL"].strip()
     argv = [*(command or codex_command()), *build_exec_args(last_message_path=last_message_path, **exec_options)]
     env = dict(os.environ)
     if profile.codex_home is not None:
