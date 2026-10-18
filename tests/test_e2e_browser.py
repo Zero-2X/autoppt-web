@@ -158,3 +158,44 @@ def test_order_review_and_download_in_a_real_browser(live):
         text = page.locator("main").inner_text()
         assert "冻结\n0" in text
         browser.close()
+
+
+def test_english_interface_shows_no_chinese(live):
+    import re
+
+    cjk = re.compile(r"[一-鿿]")
+    with playwright_api.sync_playwright() as p:
+        try:
+            browser = p.chromium.launch()
+        except Exception as exc:  # noqa: BLE001 - browser binaries missing
+            pytest.skip(f"chromium not available: {exc}")
+        page = browser.new_page(locale="en-US")
+        page.set_default_timeout(60_000)
+
+        def visible_chinese() -> list[str]:
+            return [line for line in page.locator("main").inner_text().splitlines() if cjk.search(line)]
+
+        page.goto(f"{live['base']}/#/")
+        page.get_by_text("Delivery tiers").wait_for()
+        assert visible_chinese() == []
+        page.goto(f"{live['base']}/#/login")
+        page.get_by_label("Email or phone").fill("student@example.com")
+        page.get_by_role("button", name="Send code").click()
+        code = page.get_by_text("development code").inner_text().split(":")[-1].strip(" )")
+        page.get_by_label("Code", exact=True).fill(code)
+        page.get_by_role("button", name="Sign in", exact=True).click()
+        page.wait_for_url("**/#/jobs")
+        page.goto(f"{live['base']}/#/new")
+        page.get_by_text("① Service and delivery tier").wait_for()
+        assert visible_chinese() == []
+        page.get_by_role("button", name="Next", exact=True).click()
+        page.get_by_text("② Sources and description").wait_for()
+        assert visible_chinese() == []
+        page.get_by_label("Description").fill("A master's thesis defense on street-level flood warning. " * 5)
+        page.get_by_role("button", name="Next", exact=True).click()
+        page.get_by_text("③ Scenario, slides and style").wait_for()
+        assert visible_chinese() == []
+        page.goto(f"{live['base']}/#/credits")
+        page.get_by_text("Credit history").wait_for()
+        assert visible_chinese() == []
+        browser.close()

@@ -1,5 +1,6 @@
 // Interface strings in Chinese and English.  Domain labels (scenarios, styles,
-// tiers) come from /api/options in Chinese; English shows the label_en when present.
+// tiers) come from /api/options with *_en twins; L() picks the one for the current language.
+// Page text uses tr("中文", "English") next to the code that shows it.
 
 const STRINGS = {
   zh: {
@@ -49,3 +50,5 @@ export function lang() { return current; }
 export function setLang(value) { current = value; localStorage.setItem("autoppt.lang", value); document.documentElement.lang = value === "zh" ? "zh-CN" : "en"; }
 export function t(key) { return (STRINGS[current] && STRINGS[current][key]) || STRINGS.zh[key] || key; }
 export function stateLabel(state) { return (STATE_LABELS[current] || STATE_LABELS.zh)[state] || state; }
+export function tr(zh, en) { return current === "en" ? en : zh; }
+export function L(item, key = "label") { return (current === "en" && item[`${key}_en`]) || item[key]; }

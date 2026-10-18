@@ -3,7 +3,7 @@
 // uploaded or generated content cannot inject markup.
 
 import { api, auth, ApiError, setAccessReason, uploadFile } from "./api.js";
-import { lang, setLang, stateLabel, t } from "./i18n.js";
+import { L, lang, setLang, stateLabel, t, tr } from "./i18n.js";
 
 // ---------------------------------------------------------------- tiny DOM helpers
 
@@ -75,7 +75,7 @@ function field(label, control, hint) {
 
 function select(items, value, onChange) {
   return h("select", { onchange: (e) => onChange(e.target.value) },
-    items.map((item) => h("option", { value: item.id, selected: String(item.id) === String(value) ? "selected" : null }, item.label)));
+    items.map((item) => h("option", { value: item.id, selected: String(item.id) === String(value) ? "selected" : null }, L(item))));
 }
 
 // Minimal, safe Markdown view for outline previews: headings and bullet lists only.
@@ -120,7 +120,7 @@ async function renderNav() {
   } else nav.append(h("a", { href: "#/login" }, t("login")));
   nav.append(h("button", { class: "link", onclick: () => { setLang(lang() === "zh" ? "en" : "zh"); route(); } }, t("language")));
   fill(document.getElementById("footer"), 
-    h("span", {}, "AutoPPT · 内容准确性由用户最终负责；原生可编辑版不承诺与母版逐像素一致。"),
+    h("span", {}, tr("AutoPPT · 内容准确性由用户最终负责；原生可编辑版不承诺与母版逐像素一致。", "AutoPPT · You are responsible for the accuracy of the content; the native editable deck is not pixel-identical to its masters.")),
   );
 }
 
@@ -172,19 +172,19 @@ async function pageHome() {
       h("p", {}, t("heroText")),
       h("a", { class: "button primary", href: auth.loggedIn() ? "#/new" : "#/login" }, t("start"))),
     card(t("tiers"), h("div", { class: "grid three" }, opts.delivery_tiers.map((tier) =>
-      h("div", { class: "tile" }, h("h3", {}, tier.label), h("p", { class: "muted" }, tierText(tier.id)))))),
-    card("使用场景", h("div", { class: "grid three" }, opts.scenarios.map((s) =>
-      h("div", { class: "tile" }, h("h3", {}, s.label), h("p", {}, s.use_when),
-        h("small", { class: "muted" }, `建议 ${s.default_slide_range[0]}–${s.default_slide_range[1]} 页`))))),
-    card(t("limits"), h("ul", {}, opts.notices.map((n) => h("li", {}, n)))),
+      h("div", { class: "tile" }, h("h3", {}, L(tier)), h("p", { class: "muted" }, tierText(tier.id)))))),
+    card(tr("使用场景", "Scenarios"), h("div", { class: "grid three" }, opts.scenarios.map((s) =>
+      h("div", { class: "tile" }, h("h3", {}, L(s)), h("p", {}, L(s, "use_when")),
+        h("small", { class: "muted" }, tr(`建议 ${s.default_slide_range[0]}–${s.default_slide_range[1]} 页`, `${s.default_slide_range[0]}–${s.default_slide_range[1]} slides suggested`)))))),
+    card(t("limits"), h("ul", {}, (lang() === "en" && opts.notices_en ? opts.notices_en : opts.notices).map((n) => h("li", {}, n)))),
   );
 }
 
 function tierText(id) {
   return {
-    planning_package: "大纲、逐页内容、证据对照、精确文字清单和逐页出图提示词。",
-    image_deck: "规划包 + 每页一张 AI 生成的完整母版，组装成图片版 PPTX；需审核母版。",
-    native_editable: "图片版 + 文字、形状、图表原生可改；照片等为可替换图片；附逐页对比证据。必须由你批准原生预览。",
+    planning_package: tr("大纲、逐页内容、证据对照、精确文字清单和逐页出图提示词。", "Outline, slide-by-slide content, evidence map, exact on-slide text and an image prompt per slide."),
+    image_deck: tr("规划包 + 每页一张 AI 生成的完整母版，组装成图片版 PPTX；需审核母版。", "Planning package + one AI-generated master per slide, assembled into an image PPTX; you review the masters."),
+    native_editable: tr("图片版 + 文字、形状、图表原生可改；照片等为可替换图片；附逐页对比证据。必须由你批准原生预览。", "Image deck + native, editable text, shapes and charts; photos stay replaceable pictures; slide-by-slide comparison included. You must approve the native preview."),
   }[id] || "";
 }
 
@@ -196,14 +196,14 @@ async function pagePricing() {
       pricing.note ? notice(pricing.note, "warn") : null,
       h("table", { class: "table" },
         h("tbody", {},
-          h("tr", {}, h("th", {}, "基础费（解析与规划）"), h("td", {}, `${r.base} 积分`)),
-          h("tr", {}, h("th", {}, "图片版 / 页"), h("td", {}, `${r.per_slide.image_deck} 积分`)),
-          h("tr", {}, h("th", {}, "原生可编辑版 / 页"), h("td", {}, `${r.per_slide.native_editable} 积分`)),
-          h("tr", {}, h("th", {}, "讲稿 / 预测问题"), h("td", {}, `${r.addons.speaker_notes} / ${r.addons.anticipated_questions} 积分`)),
-          h("tr", {}, h("th", {}, "母版单页重做"), h("td", {}, `${r.redo_slide} 积分 / 页`)),
-          h("tr", {}, h("th", {}, `超出 ${r.free_rounds} 轮的返修`), h("td", {}, `${r.extra_round} 积分 / 轮`)))),
-      h("p", { class: "muted" }, "下单时按页数上限冻结积分，每个阶段完成后结算；取消时只结算已完成的阶段，系统失败自动退还未完成部分。"),
-      h("p", { class: "muted" }, "测试期不接在线支付：积分通过兑换码或管理员充值获得。")));
+          h("tr", {}, h("th", {}, tr("基础费（解析与规划）", "Base fee (reading and planning)")), h("td", {}, `${r.base} ${tr("积分", "credits")}`)),
+          h("tr", {}, h("th", {}, tr("图片版 / 页", "Image deck / slide")), h("td", {}, `${r.per_slide.image_deck} ${tr("积分", "credits")}`)),
+          h("tr", {}, h("th", {}, tr("原生可编辑版 / 页", "Native editable / slide")), h("td", {}, `${r.per_slide.native_editable} ${tr("积分", "credits")}`)),
+          h("tr", {}, h("th", {}, tr("讲稿 / 预测问题", "Speaker notes / likely questions")), h("td", {}, `${r.addons.speaker_notes} / ${r.addons.anticipated_questions} ${tr("积分", "credits")}`)),
+          h("tr", {}, h("th", {}, tr("母版单页重做", "Redo one master")), h("td", {}, tr(`${r.redo_slide} 积分 / 页`, `${r.redo_slide} credits / slide`))),
+          h("tr", {}, h("th", {}, tr(`超出 ${r.free_rounds} 轮的返修`, `Revisions beyond ${r.free_rounds} rounds`)), h("td", {}, tr(`${r.extra_round} 积分 / 轮`, `${r.extra_round} credits / round`))))),
+      h("p", { class: "muted" }, tr("下单时按页数上限冻结积分，每个阶段完成后结算；取消时只结算已完成的阶段，系统失败自动退还未完成部分。", "Credits for the maximum number of slides are frozen when you order and settled as each stage finishes; cancelling settles only finished stages, and a system failure returns the rest.")),
+      h("p", { class: "muted" }, tr("测试期不接在线支付：积分通过兑换码或管理员充值获得。", "No online payment during the beta: credits come from redeem codes or an administrator."))));
 }
 
 function accountBody(value) {
@@ -232,7 +232,7 @@ async function pageLogin() {
     try {
       const reply = await api.post("/api/auth/code", accountBody(account.value));
       const sent = reply.channel === "sms" ? t("codeSentSms") : t("codeSent");
-      fill(status, notice(reply.dev_code ? `${sent}（开发模式验证码：${reply.dev_code}）` : sent));
+      fill(status, notice(reply.dev_code ? tr(`${sent}（开发模式验证码：${reply.dev_code}）`, `${sent} (development code: ${reply.dev_code})`) : sent));
       code.focus();
     } catch (error) { fill(status, errorBox(error)); }
   };
@@ -274,7 +274,7 @@ function freshWizard(opts) {
     files: [], description: "",
     scenario: scenario.id, slidesMode: "range", slidesMin: scenario.default_slide_range[0], slidesMax: scenario.default_slide_range[1],
     slidesCount: scenario.default_slide_range[1], talkMinutes: "",
-    style: scenario.default_style, styleExplicit: false, density: "medium_high", audience: "答辩委员会", language: "zh-CN",
+    style: scenario.default_style, styleExplicit: false, density: "medium_high", audience: tr("答辩委员会", "Defense committee"), language: lang() === "en" ? "en" : "zh-CN",
     cover: { title: "", subtitle: "", author: "", advisor: "", institution: "", date: "" },
     mustInclude: "", mustAvoid: "", charts: "native_with_workbook", fontAccepted: false, aspect: "16:9",
     outlineCheckpoint: true, masterCheckpoint: true, speakerNotes: false, questions: false,
@@ -324,7 +324,7 @@ async function pageNewJob() {
   let w = loadWizard() || freshWizard(opts);
   const root = h("div", { class: "wizard" });
   const set = (patch, rerender = false) => { w = { ...w, ...patch }; saveWizard(w); if (rerender) draw(); };
-  const steps = ["服务与档位", "资料与描述", "场景、页数与风格", "高级选项", "估价与确认"];
+  const steps = [tr("服务与档位", "Service and tier"), tr("资料与描述", "Sources and description"), tr("场景、页数与风格", "Scenario, slides and style"), tr("高级选项", "Advanced"), tr("估价与确认", "Estimate and confirm")];
 
   function draw() {
     fill(root, 
@@ -338,39 +338,39 @@ async function pageNewJob() {
     w.step < 5 ? h("button", { class: "primary", disabled: !canNext, onclick: () => set({ step: w.step + 1 }, true) }, nextLabel) : null);
 
   function stepService() {
-    return card("① 服务类型与交付档位",
+    return card(tr("① 服务类型与交付档位", "① Service and delivery tier"),
       h("div", { class: "grid two" }, opts.services.map((s) => h("button", {
         class: `choice ${w.service === s.id ? "selected" : ""}`,
         onclick: () => set({ service: s.id, tier: s.id === "vectorize" ? "native_editable" : w.tier }, true),
-      }, h("strong", {}, s.label), h("small", {}, s.id === "vectorize" ? "把图片版 PPT/截图/PDF 转成可编辑 PPTX（测试中）" : "用论文、报告或描述生成答辩 PPT")))),
-      h("h3", {}, "交付档位"),
+      }, h("strong", {}, L(s)), h("small", {}, s.id === "vectorize" ? tr("把图片版 PPT/截图/PDF 转成可编辑 PPTX（测试中）", "Turn an image deck, screenshots or a PDF into an editable PPTX (beta)") : tr("用论文、报告或描述生成答辩 PPT", "Build a defense deck from a thesis, report or description"))))),
+      h("h3", {}, t("tiers")),
       h("div", { class: "grid three" }, opts.delivery_tiers.map((tier) => h("button", {
         class: `choice ${w.tier === tier.id ? "selected" : ""}`,
         disabled: w.service === "vectorize" && tier.id !== "native_editable",
         onclick: () => set({ tier: tier.id }, true),
-      }, h("strong", {}, tier.label), h("small", {}, tierText(tier.id))))),
+      }, h("strong", {}, L(tier)), h("small", {}, tierText(tier.id))))),
       nav());
   }
 
   function stepFiles() {
     const list = h("div", { class: "files" });
     const roles = opts.file_roles;
-    const uploading = () => w.files.some((f) => !f.sha256 && !String(f.status).startsWith("失败"));
+    const uploading = () => w.files.some((f) => !f.sha256 && !f.failed);
     const navBar = nav(true);
     const syncNext = () => { const next = navBar.querySelector("button.primary"); if (next) next.disabled = uploading(); };
     const drawFiles = () => { syncNext(); updateHints(); fill(list, ...w.files.map((f, index) => h("div", { class: "file-row" },
       h("span", { class: "file-name" }, f.name),
       h("span", { class: "muted" }, f.status || ""),
-      select(roles.map((r) => ({ id: r.id, label: r.label })), f.role, (role) => { w.files[index].role = role; saveWizard(w); }),
-      h("button", { class: "link", onclick: () => { w.files.splice(index, 1); saveWizard(w); drawFiles(); } }, "移除")))); };
+      select(roles, f.role, (role) => { w.files[index].role = role; saveWizard(w); }),
+      h("button", { class: "link", onclick: () => { w.files.splice(index, 1); saveWizard(w); drawFiles(); } }, tr("移除", "Remove"))))); };
     const input = h("input", { type: "file", multiple: true, onchange: async (event) => {
       for (const file of event.target.files) {
-        const entry = { file_id: `f_${String(w.files.length + 1).padStart(2, "0")}`, name: file.name, role: guessRole(file.name, w.service), status: "上传中 0%" };
+        const entry = { file_id: `f_${String(w.files.length + 1).padStart(2, "0")}`, name: file.name, role: guessRole(file.name, w.service), status: tr("上传中 0%", "uploading 0%") };
         w.files.push(entry); drawFiles();
         try {
-          const done = await uploadFile(file, (sent, total) => { entry.status = `上传中 ${Math.round((100 * sent) / total)}%`; drawFiles(); });
-          Object.assign(entry, { sha256: done.sha256, status: `已上传（${done.kind}）` });
-        } catch (error) { entry.status = `失败：${error.message}`; }
+          const done = await uploadFile(file, (sent, total) => { entry.status = tr(`上传中 ${Math.round((100 * sent) / total)}%`, `uploading ${Math.round((100 * sent) / total)}%`); drawFiles(); });
+          Object.assign(entry, { sha256: done.sha256, status: tr(`已上传（${done.kind}）`, `uploaded (${done.kind})`) });
+        } catch (error) { Object.assign(entry, { failed: true, status: `${tr("失败：", "failed: ")}${error.message}` }); }
         saveWizard(w); drawFiles();
       }
       event.target.value = "";
@@ -380,20 +380,20 @@ async function pageNewJob() {
     const hints = h("ul", { class: "hints" });
     const updateHints = () => {
       const count = nonSpace(w.description);
-      counter.textContent = hasDocs() ? `${count} 字（有文档时作为重点说明）` : `${count} / ${opts.limits.min_description_chars_without_documents} 字（未上传文档时必填）`;
+      counter.textContent = hasDocs() ? tr(`${count} 字（有文档时作为重点说明）`, `${count} characters (with documents, this says what to stress)`) : tr(`${count} / ${opts.limits.min_description_chars_without_documents} 字（未上传文档时必填）`, `${count} / ${opts.limits.min_description_chars_without_documents} characters (required without documents)`);
       const tips = [];
       if (!hasDocs()) {
-        if (count < opts.limits.min_description_chars_without_documents) tips.push("没有文档时，请写清主题、目的、核心结论和关键数据。");
-        if (!/\d/.test(w.description)) tips.push("没有数字：只凭描述生成的内容会标注为“框架或示意”，不会编造数据。");
+        if (count < opts.limits.min_description_chars_without_documents) tips.push(tr("没有文档时，请写清主题、目的、核心结论和关键数据。", "Without documents, state the topic, the purpose, the main conclusions and the key data."));
+        if (!/\d/.test(w.description)) tips.push(tr("没有数字：只凭描述生成的内容会标注为“框架或示意”，不会编造数据。", "No numbers: content built only from a description is marked as a framework or illustration; no data is invented."));
       }
       fill(hints, ...tips.map((tip) => h("li", {}, tip)));
     };
-    const description = h("textarea", { rows: 8, value: w.description, "aria-label": "描述文字", oninput: (e) => { set({ description: e.target.value }); updateHints(); } });
+    const description = h("textarea", { rows: 8, value: w.description, "aria-label": tr("描述文字", "Description"), oninput: (e) => { set({ description: e.target.value }); updateHints(); } });
     drawFiles();
-    return card("② 资料与描述",
-      h("p", { class: "muted" }, "为每个文件选择用途：主资料、补充资料、图表数据、图片素材、原图保留（不让 AI 重绘）、Logo、风格参考、待矢量化文件。支持 DOCX、PDF、PPTX、XLSX、CSV、MD/TXT/TEX、PNG/JPG/WebP/HEIC、ZIP。"),
+    return card(tr("② 资料与描述", "② Sources and description"),
+      h("p", { class: "muted" }, tr("为每个文件选择用途：主资料、补充资料、图表数据、图片素材、原图保留（不让 AI 重绘）、Logo、风格参考、待矢量化文件。支持 DOCX、PDF、PPTX、XLSX、CSV、MD/TXT/TEX、PNG/JPG/WebP/HEIC、ZIP。", "Choose a role for each file: main source, supplementary material, chart data, images, keep as is (never redrawn by AI), logo, style reference, or pages to make editable. DOCX, PDF, PPTX, XLSX, CSV, MD/TXT/TEX, PNG/JPG/WebP/HEIC and ZIP are accepted.")),
       input, list,
-      field("描述文字", description, null), counter, hints,
+      field(tr("描述文字", "Description"), description, null), counter, hints,
       navBar);
   }
 
@@ -401,76 +401,76 @@ async function pageNewJob() {
     const scenario = opts.scenarios.find((s) => s.id === w.scenario);
     const style = opts.styles.find((s) => s.id === w.style);
     const slides = w.slidesMode === "fixed"
-      ? field("页数", h("input", { type: "number", min: 1, max: opts.limits.max_slides, value: w.slidesCount, oninput: (e) => set({ slidesCount: e.target.value }) }))
+      ? field(tr("页数", "Slides"), h("input", { type: "number", min: 1, max: opts.limits.max_slides, value: w.slidesCount, oninput: (e) => set({ slidesCount: e.target.value }) }))
       : w.slidesMode === "range"
         ? h("div", { class: "row" },
-          field("最少", h("input", { type: "number", min: 1, max: opts.limits.max_slides, value: w.slidesMin, oninput: (e) => set({ slidesMin: e.target.value }) })),
-          field("最多", h("input", { type: "number", min: 1, max: opts.limits.max_slides, value: w.slidesMax, oninput: (e) => set({ slidesMax: e.target.value }) })))
+          field(tr("最少", "At least"), h("input", { type: "number", min: 1, max: opts.limits.max_slides, value: w.slidesMin, oninput: (e) => set({ slidesMin: e.target.value }) })),
+          field(tr("最多", "At most"), h("input", { type: "number", min: 1, max: opts.limits.max_slides, value: w.slidesMax, oninput: (e) => set({ slidesMax: e.target.value }) })))
         : null;
-    return card("③ 场景、页数与风格",
+    return card(tr("③ 场景、页数与风格", "③ Scenario, slides and style"),
       w.service === "new_deck" ? [
-        h("h3", {}, "使用场景"),
+        h("h3", {}, tr("使用场景", "Scenario")),
         h("div", { class: "grid three" }, opts.scenarios.map((s) => h("button", {
           class: `choice ${w.scenario === s.id ? "selected" : ""}`,
           onclick: () => set({ scenario: s.id, slidesMin: s.default_slide_range[0], slidesMax: s.default_slide_range[1], style: w.styleExplicit ? w.style : s.default_style }, true),
-        }, h("strong", {}, s.label), h("small", {}, s.use_when)))),
-        h("h3", {}, "页数"),
+        }, h("strong", {}, L(s)), h("small", {}, L(s, "use_when"))))),
+        h("h3", {}, tr("页数", "Slides")),
         h("div", { class: "row" },
-          select(opts.slide_modes.map((m) => ({ id: m.id, label: m.label })), w.slidesMode, (mode) => set({ slidesMode: mode }, true)),
+          select(opts.slide_modes, w.slidesMode, (mode) => set({ slidesMode: mode }, true)),
           slides,
-          field("演讲时长（分钟）", h("input", { type: "number", min: 1, max: 180, value: w.talkMinutes, oninput: (e) => set({ talkMinutes: e.target.value }) }),
-            scenario ? `本场景约每页 ${scenario.default_duration_seconds} 秒` : null)),
+          field(tr("演讲时长（分钟）", "Talk length (minutes)"), h("input", { type: "number", min: 1, max: 180, value: w.talkMinutes, oninput: (e) => set({ talkMinutes: e.target.value }) }),
+            scenario ? tr(`本场景约每页 ${scenario.default_duration_seconds} 秒`, `about ${scenario.default_duration_seconds} s per slide in this scenario`) : null)),
       ] : h("div", { class: "stack" },
         h("div", { class: "row" },
-          field("要转换的页数", h("input", { type: "number", min: 1, max: opts.limits.max_slides, value: w.slidesCount, oninput: (e) => set({ slidesCount: e.target.value }) })),
-          field("页码选择（可选）", h("input", { placeholder: "例如 1-5,8", value: w.vecPages, oninput: (e) => set({ vecPages: e.target.value }) }), "留空表示全部页"),
-          field("可编辑深度", select([
-            { id: "text", label: "只做文字" }, { id: "text_shapes", label: "文字 + 形状" }, { id: "text_shapes_charts", label: "文字 + 形状 + 图表" },
+          field(tr("要转换的页数", "Pages to convert"), h("input", { type: "number", min: 1, max: opts.limits.max_slides, value: w.slidesCount, oninput: (e) => set({ slidesCount: e.target.value }) })),
+          field(tr("页码选择（可选）", "Pages (optional)"), h("input", { placeholder: tr("例如 1-5,8", "e.g. 1-5,8"), value: w.vecPages, oninput: (e) => set({ vecPages: e.target.value }) }), tr("留空表示全部页", "empty = all pages")),
+          field(tr("可编辑深度", "Editable depth"), select([
+            { id: "text", label: tr("只做文字", "Text only") }, { id: "text_shapes", label: tr("文字 + 形状", "Text + shapes") }, { id: "text_shapes_charts", label: tr("文字 + 形状 + 图表", "Text + shapes + charts") },
           ], w.vecDepth, (v) => set({ vecDepth: v })))),
         h("label", { class: "check" }, h("input", { type: "checkbox", checked: w.vecKeepPhotos, onchange: (e) => set({ vecKeepPhotos: e.target.checked }) }),
-          "照片和复杂插图保留为可移动的图片"),
-        notice("上传的页面会作为“用户提供的母版”冻结，不经过 AI 重绘；识别出的文字会先交给你核对。", "info")),
-      h("h3", {}, "风格"),
+          tr("照片和复杂插图保留为可移动的图片", "Keep photos and complex artwork as movable pictures")),
+        notice(tr("上传的页面会作为“用户提供的母版”冻结，不经过 AI 重绘；识别出的文字会先交给你核对。", "Your pages are frozen as user-supplied masters and never redrawn by AI; the recognised text comes to you for checking first."), "info")),
+      h("h3", {}, tr("风格", "Style")),
       h("div", { class: "grid three" }, opts.styles.map((s) => h("button", {
         class: `choice ${w.style === s.id ? "selected" : ""}`,
         onclick: () => set({ style: s.id, styleExplicit: false }, true),
-      }, h("strong", {}, s.label, s.is_default ? "（默认）" : ""), h("small", {}, s.use_when), swatches(s.palette)))),
+      }, h("strong", {}, L(s), s.is_default ? tr("（默认）", " (default)") : ""), h("small", {}, L(s, "use_when")), swatches(s.palette)))),
       style && style.requires_explicit_choice ? h("label", { class: "check" },
         h("input", { type: "checkbox", checked: w.styleExplicit, onchange: (e) => set({ styleExplicit: e.target.checked }) }),
-        `我确认选择“${style.label}”（${style.dark ? "深色" : "极简"}风格需要主动确认）`) : null,
+        tr(`我确认选择“${style.label}”（${style.dark ? "深色" : "极简"}风格需要主动确认）`, `I choose “${L(style)}” (a ${style.dark ? "dark" : "minimal"} style needs an explicit choice)`)) : null,
       h("div", { class: "row" },
-        field("受众", h("input", { list: "audiences", value: w.audience, oninput: (e) => set({ audience: e.target.value }) })),
-        h("datalist", { id: "audiences" }, opts.audiences.map((a) => h("option", { value: a }))),
-        field("语言", select(opts.languages.map((l) => ({ id: l.id, label: l.label })), w.language, (v) => set({ language: v }))),
-        field("信息密度", select(opts.densities.map((d) => ({ id: d.id, label: d.label })), w.density, (v) => set({ density: v })))),
+        field(tr("受众", "Audience"), h("input", { list: "audiences", value: w.audience, oninput: (e) => set({ audience: e.target.value }) })),
+        h("datalist", { id: "audiences" }, (lang() === "en" && opts.audiences_en ? opts.audiences_en : opts.audiences).map((a) => h("option", { value: a }))),
+        field(tr("语言", "Language"), select(opts.languages, w.language, (v) => set({ language: v }))),
+        field(tr("信息密度", "Information density"), select(opts.densities, w.density, (v) => set({ density: v })))),
       nav());
   }
 
   function stepAdvanced() {
     const coverField = (key, label) => field(label, h("input", { value: w.cover[key], oninput: (e) => { w.cover[key] = e.target.value; saveWizard(w); } }));
     const usesLogo = w.files.some((f) => f.role === "logo");
-    return card("④ 高级选项",
-      h("h3", {}, "封面信息（按原文进入页面）"),
-      h("div", { class: "grid three" }, coverField("title", "标题"), coverField("subtitle", "副标题"), coverField("author", "汇报人"),
-        coverField("advisor", "导师"), coverField("institution", "单位"), coverField("date", "日期")),
+    return card(tr("④ 高级选项", "④ Advanced"),
+      h("h3", {}, tr("封面信息（按原文进入页面）", "Cover (used exactly as typed)")),
+      h("div", { class: "grid three" }, coverField("title", tr("标题", "Title")), coverField("subtitle", tr("副标题", "Subtitle")), coverField("author", tr("汇报人", "Presenter")),
+        coverField("advisor", tr("导师", "Supervisor")), coverField("institution", tr("单位", "Institution")), coverField("date", tr("日期", "Date"))),
       h("div", { class: "grid two" },
-        field("必须包含（每行一条）", h("textarea", { rows: 4, value: w.mustInclude, oninput: (e) => set({ mustInclude: e.target.value }) })),
-        field("必须避免（每行一条）", h("textarea", { rows: 4, value: w.mustAvoid, oninput: (e) => set({ mustAvoid: e.target.value }) }))),
+        field(tr("必须包含（每行一条）", "Must include (one per line)"), h("textarea", { rows: 4, value: w.mustInclude, oninput: (e) => set({ mustInclude: e.target.value }) })),
+        field(tr("必须避免（每行一条）", "Must avoid (one per line)"), h("textarea", { rows: 4, value: w.mustAvoid, oninput: (e) => set({ mustAvoid: e.target.value }) }))),
       h("div", { class: "row" },
-        field("画幅", select(opts.aspect_ratios.map((a) => ({ id: a.id, label: a.label })), w.aspect, (v) => set({ aspect: v }))),
-        w.tier === "native_editable" ? field("图表", select(opts.chart_modes.filter((c) => c.id !== "in_image").map((c) => ({ id: c.id, label: c.label })), w.charts, (v) => set({ charts: v }))) : null,
-        field("数据保留", select(opts.retention_days.map((d) => ({ id: d, label: `${d} 天后删除` })), w.retention, (v) => set({ retention: Number(v) }))),
-        field("截止时间", h("input", { type: "datetime-local", value: w.deadline, oninput: (e) => set({ deadline: e.target.value }) }))),
+        field(tr("画幅", "Aspect ratio"), select(opts.aspect_ratios, w.aspect, (v) => set({ aspect: v }))),
+        w.tier === "native_editable" ? field(tr("图表", "Charts"), select(opts.chart_modes.filter((c) => c.id !== "in_image"), w.charts, (v) => set({ charts: v }))) : null,
+        field(tr("数据保留", "Data retention"), select(opts.retention_days.map((d) => ({ id: d, label: tr(`${d} 天后删除`, `delete after ${d} days`) })), w.retention, (v) => set({ retention: Number(v) }))),
+        field(tr("截止时间", "Deadline"), h("input", { type: "datetime-local", value: w.deadline, oninput: (e) => set({ deadline: e.target.value }) }))),
       w.tier === "native_editable" ? h("label", { class: "check" },
         h("input", { type: "checkbox", checked: w.fontAccepted, onchange: (e) => set({ fontAccepted: e.target.checked }) }),
-        "接受用 Office 字体（微软雅黑/等线）替代母版字形（原生可编辑版必须勾选）") : null,
-      h("label", { class: "check" }, h("input", { type: "checkbox", checked: w.outlineCheckpoint, onchange: (e) => set({ outlineCheckpoint: e.target.checked }) }), "大纲确认（CP1）"),
-      w.tier !== "planning_package" ? h("label", { class: "check" }, h("input", { type: "checkbox", checked: w.masterCheckpoint, onchange: (e) => set({ masterCheckpoint: e.target.checked }) }), "母版审核（CP2）") : null,
-      w.tier === "native_editable" ? h("label", { class: "check disabled" }, h("input", { type: "checkbox", checked: true, disabled: true }), "原生预览批准（CP3，不能关闭）") : null,
-      h("label", { class: "check" }, h("input", { type: "checkbox", checked: w.speakerNotes, onchange: (e) => set({ speakerNotes: e.target.checked }) }), "讲稿（单独计费）"),
-      h("label", { class: "check" }, h("input", { type: "checkbox", checked: w.questions, onchange: (e) => set({ questions: e.target.checked }) }), "预测问题（单独计费）"),
-      h("label", { class: "check" }, h("input", { type: "checkbox", checked: w.caseStudy, onchange: (e) => set({ caseStudy: e.target.checked }) }), "允许脱敏后作为案例展示（默认不允许）"),
-      usesLogo ? h("label", { class: "check" }, h("input", { type: "checkbox", checked: w.logoRights, onchange: (e) => set({ logoRights: e.target.checked }) }), "我确认拥有所上传 Logo 的使用权") : null,
+        tr("接受用 Office 字体（微软雅黑/等线）替代母版字形（原生可编辑版必须勾选）", "Accept Office fonts (Microsoft YaHei / DengXian) in place of the masters’ lettering (required for the native editable deck)")) : null,
+      h("label", { class: "check" }, h("input", { type: "checkbox", checked: w.outlineCheckpoint, onchange: (e) => set({ outlineCheckpoint: e.target.checked }) }), tr("大纲确认（CP1）", "Outline review (CP1)")),
+      w.tier !== "planning_package" ? h("label", { class: "check" }, h("input", { type: "checkbox", checked: w.masterCheckpoint, onchange: (e) => set({ masterCheckpoint: e.target.checked }) }), tr("母版审核（CP2）", "Master review (CP2)")) : null,
+      w.tier === "native_editable" ? h("label", { class: "check disabled" }, h("input", { type: "checkbox", checked: true, disabled: true }), tr("原生预览批准（CP3，不能关闭）", "Native preview approval (CP3, always on)")) : null,
+      h("label", { class: "check" }, h("input", { type: "checkbox", checked: w.speakerNotes, onchange: (e) => set({ speakerNotes: e.target.checked }) }), tr("讲稿（单独计费）", "Speaker notes (charged separately)")),
+      h("label", { class: "check" }, h("input", { type: "checkbox", checked: w.questions, onchange: (e) => set({ questions: e.target.checked }) }), tr("预测问题（单独计费）", "Likely questions (charged separately)")),
+      h("label", { class: "check" }, h("input", { type: "checkbox", checked: w.caseStudy, onchange: (e) => set({ caseStudy: e.target.checked }) }), tr("允许脱敏后作为案例展示（默认不允许）", "Allow use as an anonymised showcase (off by default)")),
+      usesLogo ? h("label", { class: "check" }, h("input", { type: "checkbox", checked: w.logoRights, onchange: (e) => set({ logoRights: e.target.checked }) }), tr("我确认拥有所上传 Logo 的使用权", "I confirm I may use the uploaded logo")) : null,
       nav());
   }
 
@@ -485,10 +485,10 @@ async function pageNewJob() {
         const credits = await api.get("/api/credits");
         const rows = Object.entries(quote.phases).filter(([, v]) => v).map(([phase, v]) => h("tr", {}, h("th", {}, phaseLabel(phase)), h("td", {}, `${v}`)));
         fill(box, 
-          quote.provisional ? notice("测试期价格，P1 实测后调整。", "warn") : null,
+          quote.provisional ? notice(tr("测试期价格，P1 实测后调整。", "Beta prices, to be adjusted after measured runs."), "warn") : null,
           h("table", { class: "table" }, h("tbody", {}, rows,
-            h("tr", { class: "total" }, h("th", {}, t("total")), h("td", {}, `${quote.total} 积分`)))),
-          h("p", {}, `按 ${quote.slides_for_hold} 页冻结 ${quote.hold} 积分；当前可用 ${credits.available}。每个阶段完成后结算，取消时只结算已完成阶段。`),
+            h("tr", { class: "total" }, h("th", {}, t("total")), h("td", {}, `${quote.total} ${tr("积分", "credits")}`)))),
+          h("p", {}, tr(`按 ${quote.slides_for_hold} 页冻结 ${quote.hold} 积分；当前可用 ${credits.available}。每个阶段完成后结算，取消时只结算已完成阶段。`, `${quote.hold} credits frozen for ${quote.slides_for_hold} slides; ${credits.available} available. Each stage settles when it finishes; cancelling settles only finished stages.`)),
           quote.warnings.length ? h("div", { class: "notice warn" }, quote.warnings.map((x) => h("div", {}, x.message))) : null,
           quote.derived.content_notice ? notice(quote.derived.content_notice, "warn") : null,
           h("p", { class: "muted" }, tierText(w.tier)),
@@ -502,18 +502,18 @@ async function pageNewJob() {
                 me = null;
                 location.hash = `#/jobs/${job.id}`;
               } catch (error) { box.append(errorBox(error)); e.target.disabled = false; }
-            } }, `${t("submit")}（${quote.total} 积分）`)),
-          credits.available < quote.total ? notice("积分不足：请先在“积分”页使用兑换码。", "error") : null);
+            } }, `${t("submit")} (${quote.total} ${tr("积分", "credits")})`)),
+          credits.available < quote.total ? notice(tr("积分不足：请先在“积分”页使用兑换码。", "Not enough credits: redeem a code on the Credits page first."), "error") : null);
       } catch (error) {
         fill(box, errorBox(error), h("div", { class: "row end" }, h("button", { onclick: () => set({ step: 4 }, true) }, t("back"))));
       }
     })();
-    return card("⑤ 估价与确认", box);
+    return card(tr("⑤ 估价与确认", "⑤ Estimate and confirm"), box);
   }
 
   draw();
   return h("div", {}, h("div", { class: "row space" }, h("h1", {}, t("newJob")),
-    h("button", { class: "link", onclick: () => { sessionStorage.removeItem(DRAFT_KEY); w = freshWizard(opts); draw(); } }, "重新开始")), root);
+    h("button", { class: "link", onclick: () => { sessionStorage.removeItem(DRAFT_KEY); w = freshWizard(opts); draw(); } }, tr("重新开始", "Start over"))), root);
 }
 
 function guessRole(name, service) {
@@ -535,7 +535,8 @@ function swatches(palette) {
 }
 
 function phaseLabel(phase) {
-  return { intake: "解析", planning: "规划", masters: "母版", reconstruct: "原生重建", package: "打包与附加项" }[phase] || phase;
+  return (lang() === "en" ? { intake: "Reading", planning: "Planning", masters: "Masters", reconstruct: "Native rebuild", package: "Packaging and add-ons" }
+    : { intake: "解析", planning: "规划", masters: "母版", reconstruct: "原生重建", package: "打包与附加项" })[phase] || phase;
 }
 
 // ---------------------------------------------------------------- jobs
@@ -544,7 +545,7 @@ async function pageJobs() {
   const jobs = await api.get("/api/jobs");
   if (!jobs.length) return card(t("myJobs"), h("p", {}, t("empty")), h("a", { class: "button primary", href: "#/new" }, t("newJob")));
   return card(t("myJobs"), h("table", { class: "table" },
-    h("thead", {}, h("tr", {}, h("th", {}, "标题"), h("th", {}, t("state")), h("th", {}, "积分"), h("th", {}, t("created")))),
+    h("thead", {}, h("tr", {}, h("th", {}, tr("标题", "Title")), h("th", {}, t("state")), h("th", {}, t("credits")), h("th", {}, t("created")))),
     h("tbody", {}, jobs.map((job) => h("tr", {},
       h("td", {}, h("a", { href: `#/jobs/${job.id}` }, job.title || job.id.slice(0, 8))),
       h("td", {}, stateBadge(job.state)),
@@ -571,16 +572,16 @@ async function pageJob(jobId) {
     const job = await api.get(`/api/jobs/${jobId}`);
     const head = card(job.title || job.id,
       h("div", { class: "row" }, stateBadge(job.state),
-        job.hold ? h("span", { class: "muted" }, `已结算 ${job.hold.amount - job.hold.remaining} / 冻结 ${job.hold.amount}`) : null),
-      job.state === "blocked" ? notice(`任务暂停：${job.blocked_reason}`, "error") : null,
+        job.hold ? h("span", { class: "muted" }, tr(`已结算 ${job.hold.amount - job.hold.remaining} / 冻结 ${job.hold.amount}`, `settled ${job.hold.amount - job.hold.remaining} / frozen ${job.hold.amount}`)) : null),
+      job.state === "blocked" ? notice(`${tr("任务暂停：", "Paused: ")}${job.blocked_reason}`, "error") : null,
       progressBar(job),
       h("div", { class: "row" },
         !["delivered", "failed", "cancelled", "draft", "estimated"].includes(job.state) ? h("button", { class: "danger", onclick: async () => {
-          if (!confirm("取消后只结算已完成的阶段，未完成部分的冻结积分会释放。确定取消？")) return;
+          if (!confirm(tr("取消后只结算已完成的阶段，未完成部分的冻结积分会释放。确定取消？", "Only finished stages are charged and the rest of the frozen credits is released. Cancel the job?"))) return;
           await api.post(`/api/jobs/${jobId}/cancel`); me = null; await draw(); await renderNav();
         } }, t("cancel")) : null,
         ["delivered", "failed", "cancelled", "draft", "estimated"].includes(job.state) ? h("button", { class: "link", onclick: async () => {
-          if (!confirm("删除后任务资料和产物无法恢复。确定删除？")) return;
+          if (!confirm(tr("删除后任务资料和产物无法恢复。确定删除？", "The job’s files and outputs cannot be recovered after deletion. Delete?"))) return;
           await api.del(`/api/jobs/${jobId}`); location.hash = "#/jobs";
         } }, t("del")) : null));
     const parts = [head];
@@ -628,14 +629,16 @@ async function reviewPanel(job, redraw) {
   const cp = await api.get(`/api/jobs/${job.id}/checkpoint`);
   const status = h("div");
   const send = async (body, charge) => {
-    if (charge > 0 && !confirm(`这一步将扣除 ${charge} 积分，确认继续？`)) return;
+    if (charge > 0 && !confirm(tr(`这一步将扣除 ${charge} 积分，确认继续？`, `This step costs ${charge} credits. Continue?`))) return;
     try {
       await api.post(`/api/jobs/${job.id}/checkpoint/${cp.checkpoint_id}/response`, { ...body, charge_confirmed: charge > 0 });
       me = null; await redraw(); await renderNav();
     } catch (error) { fill(status, errorBox(error)); }
   };
   const extraRound = () => (cp.round >= (cp.pricing.free_rounds || 2) ? cp.pricing.extra_round || 0 : 0);
-  const title = `${t("review")} · ${{ outline: "大纲确认", masters: "母版审核", native_preview: "原生预览批准", vectorize_text: "文字核对" }[cp.type]}（第 ${cp.round} 轮）`;
+  const kinds = lang() === "en" ? { outline: "Outline", masters: "Masters", native_preview: "Native preview", vectorize_text: "Text check" }
+    : { outline: "大纲确认", masters: "母版审核", native_preview: "原生预览批准", vectorize_text: "文字核对" };
+  const title = `${t("review")} · ${kinds[cp.type]}${tr(`（第 ${cp.round} 轮）`, ` (round ${cp.round})`)}`;
   if (cp.type === "vectorize_text") return card(title, cp.summary ? h("p", {}, cp.summary) : null, await textReview(cp, send), status);
   if (cp.type === "outline") return card(title, cp.summary ? h("p", {}, cp.summary) : null, await outlineReview(cp, send, extraRound), status);
   if (cp.type === "masters") return card(title, cp.summary ? h("p", {}, cp.summary) : null, mastersReview(cp, send, extraRound), status);
@@ -647,16 +650,16 @@ async function outlineReview(cp, send, extraRound) {
   const text = documentPreview && documentPreview.url ? await (await fetch(documentPreview.url)).text() : "";
   const slideIds = [...text.matchAll(/^##\s+(S\d{2})/gm)].map((m) => m[1]);
   const notes = Object.fromEntries(slideIds.map((id) => [id, ""]));
-  const general = h("textarea", { rows: 3, placeholder: "整体意见（可选）" });
+  const general = h("textarea", { rows: 3, placeholder: tr("整体意见（可选）", "Overall comments (optional)") });
   return h("div", { class: "stack" },
     markdownView(text),
-    slideIds.length ? h("details", {}, h("summary", {}, "逐页批注"), slideIds.map((id) =>
+    slideIds.length ? h("details", {}, h("summary", {}, tr("逐页批注", "Comments per slide")), slideIds.map((id) =>
       field(id, h("input", { oninput: (e) => { notes[id] = e.target.value; } })))) : null,
     general,
     h("div", { class: "row end" },
       h("button", { onclick: () => {
         const annotations = Object.entries(notes).filter(([, v]) => v.trim()).map(([slide_id, v]) => ({ slide_id, text: v.trim() }));
-        if (!annotations.length && !general.value.trim()) { alert("请写出要修改的地方"); return; }
+        if (!annotations.length && !general.value.trim()) { alert(tr("请写出要修改的地方", "Say what should change")); return; }
         send({ decision: "revise", user_reply: general.value, annotations }, extraRound());
       } }, t("revise")),
       h("button", { class: "primary", onclick: () => send({ decision: "approve", user_reply: general.value || "通过" }, 0) }, t("approve"))));
@@ -680,34 +683,34 @@ async function textReview(cp, send) {
         });
         // OCR sometimes splits one character into its components (涝 -> 氵劳); offer the fix, never apply it silently.
         const hint = line.suggestion ? h("button", { class: "link", type: "button", onclick: () => { input.value = line.suggestion; record(line.suggestion); } },
-          `采用建议：${line.suggestion}`) : line.suspect ? h("small", { class: "hint" }, "这一行可能识别有误，请核对") : null;
+          tr(`采用建议：${line.suggestion}`, `Use suggestion: ${line.suggestion}`)) : line.suspect ? h("small", { class: "hint" }, tr("这一行可能识别有误，请核对", "This line may be misread; please check it")) : null;
         return h("div", { class: "stack tight" }, input, hint);
       }),
-      h("textarea", { rows: 2, placeholder: "识别漏掉的文字（每行一条，可选）",
+      h("textarea", { rows: 2, placeholder: tr("识别漏掉的文字（每行一条，可选）", "Text the recognition missed (one per line, optional)"),
         oninput: (e) => { added[slide.slide_id] = e.target.value.split("\n").map((s) => s.trim()).filter(Boolean); } }),
-      h("small", { class: "muted" }, "清空一行即删除该行。"))));
+      h("small", { class: "muted" }, tr("清空一行即删除该行。", "Empty a line to delete it.")))));
   return h("div", { class: "stack" },
-    notice("请逐页核对识别出的文字。核对后的文字会作为最终页面文字使用，之后不会再被识别结果覆盖。", "warn"),
+    notice(tr("请逐页核对识别出的文字。核对后的文字会作为最终页面文字使用，之后不会再被识别结果覆盖。", "Check the recognised text slide by slide. The checked text becomes the final slide text and is never overwritten by recognition again."), "warn"),
     pages,
     h("div", { class: "row end" }, h("button", { class: "primary", onclick: () => send({
       decision: "approve", user_reply: "文字已核对", answers: { text_corrections: corrections, added_lines: added },
-    }, 0) }, "确认文字，开始重建")));
+    }, 0) }, tr("确认文字，开始重建", "Confirm the text and rebuild"))));
 }
 
 function mastersReview(cp, send, extraRound) {
   const chosen = new Set();
-  const reason = h("textarea", { rows: 3, placeholder: "重做原因（勾选的页）" });
+  const reason = h("textarea", { rows: 3, placeholder: tr("重做原因（勾选的页）", "Why redo the ticked slides") });
   const slides = cp.previews.filter((p) => p.kind === "slide");
   const sheet = cp.previews.find((p) => p.kind === "contact_sheet");
   return h("div", { class: "stack" },
-    sheet && sheet.url ? h("img", { class: "contact", src: sheet.url, alt: "联系表" }) : null,
+    sheet && sheet.url ? h("img", { class: "contact", src: sheet.url, alt: tr("联系表", "Contact sheet") }) : null,
     h("div", { class: "gallery" }, slides.map((p) => h("figure", {},
       h("a", { href: p.url, target: "_blank", rel: "noopener" }, h("img", { src: p.url, alt: p.slide_id, loading: "lazy" })),
-      h("figcaption", {}, h("label", { class: "check" }, h("input", { type: "checkbox", onchange: (e) => (e.target.checked ? chosen.add(p.slide_id) : chosen.delete(p.slide_id)) }), `${p.slide_id} 重做`))))),
+      h("figcaption", {}, h("label", { class: "check" }, h("input", { type: "checkbox", onchange: (e) => (e.target.checked ? chosen.add(p.slide_id) : chosen.delete(p.slide_id)) }), tr(`${p.slide_id} 重做`, `redo ${p.slide_id}`)))))),
     reason,
     h("div", { class: "row end" },
       h("button", { onclick: () => {
-        if (!chosen.size) { alert("请先勾选要重做的页"); return; }
+        if (!chosen.size) { alert(tr("请先勾选要重做的页", "Tick the slides to redo first")); return; }
         const ids = [...chosen];
         const charge = (cp.pricing.redo_slide || 0) * ids.length + extraRound();
         send({ decision: "redo_slides", redo_slide_ids: ids, user_reply: reason.value || `重做 ${ids.join("、")}`,
@@ -719,23 +722,23 @@ function mastersReview(cp, send, extraRound) {
 function nativeReview(cp, send, extraRound) {
   const sides = cp.previews.filter((p) => p.kind === "side_by_side");
   const heat = Object.fromEntries(cp.previews.filter((p) => p.kind === "diff_heatmap").map((p) => [p.slide_id, p]));
-  const reply = h("textarea", { rows: 3, placeholder: "请用一句话写下你的决定，例如：接受预览中的非文字差异，优先真实可编辑" });
+  const reply = h("textarea", { rows: 3, placeholder: tr("请用一句话写下你的决定，例如：接受预览中的非文字差异，优先真实可编辑", "Write your decision in one sentence, e.g. I accept the non-text differences in the preview; real editability first") });
   const scope = cp.editability_scope || {};
   return h("div", { class: "stack" },
-    notice("原生可编辑版与母版之间会有字体和局部图形差异。请逐页查看对比图和差异热图；你的原话会记录在验收记录里。", "warn"),
-    h("p", {}, `原生可编辑：${(scope.native || []).join("、") || "—"}；以图片保留：${(scope.image || []).join("、") || "—"}`),
+    notice(tr("原生可编辑版与母版之间会有字体和局部图形差异。请逐页查看对比图和差异热图；你的原话会记录在验收记录里。", "The native editable deck differs from the masters in fonts and some graphics. Look at every comparison and heat map; your own words go into the acceptance record."), "warn"),
+    h("p", {}, tr(`原生可编辑：${(scope.native || []).join("、") || "—"}；以图片保留：${(scope.image || []).join("、") || "—"}`, `Native and editable: ${(scope.native || []).join(", ") || "—"}; kept as pictures: ${(scope.image || []).join(", ") || "—"}`)),
     sides.map((p) => h("figure", { class: "compare" },
-      h("img", { src: p.url, alt: `${p.slide_id} 对比`, loading: "lazy" }),
-      heat[p.slide_id] && heat[p.slide_id].url ? h("details", {}, h("summary", {}, `${p.slide_id} 差异热图`), h("img", { src: heat[p.slide_id].url, alt: `${p.slide_id} 差异`, loading: "lazy" })) : null,
+      h("img", { src: p.url, alt: tr(`${p.slide_id} 对比`, `${p.slide_id} comparison`), loading: "lazy" }),
+      heat[p.slide_id] && heat[p.slide_id].url ? h("details", {}, h("summary", {}, tr(`${p.slide_id} 差异热图`, `${p.slide_id} difference heat map`)), h("img", { src: heat[p.slide_id].url, alt: tr(`${p.slide_id} 差异`, `${p.slide_id} differences`), loading: "lazy" })) : null,
       h("figcaption", {}, p.slide_id))),
     reply,
     h("div", { class: "row end" },
       h("button", { onclick: () => {
-        if (!reply.value.trim()) { alert("请写出需要返修的问题"); return; }
+        if (!reply.value.trim()) { alert(tr("请写出需要返修的问题", "Say what needs fixing")); return; }
         send({ decision: "revise", user_reply: reply.value }, extraRound());
       } }, t("revise")),
       h("button", { class: "primary", onclick: () => {
-        if (!reply.value.trim()) { alert("批准原生预览需要你写一句话说明接受的范围"); return; }
+        if (!reply.value.trim()) { alert(tr("批准原生预览需要你写一句话说明接受的范围", "Approving the native preview needs one sentence saying what you accept")); return; }
         send({ decision: "approve", user_reply: reply.value, reviewed_previews: sides.map((p) => p.path) }, 0);
       } }, t("accept"))));
 }
@@ -748,23 +751,24 @@ async function pageCredits() {
   const orders = await api.get("/api/orders");
   const code = h("input", { placeholder: "XXXX-XXXX-XXXX-XXXX" });
   const status = h("div");
-  const orderStatus = { pending: "待支付", paid: "已支付", refunded: "已退款", expired: "已过期" };
+  const orderStatus = lang() === "en" ? { pending: "Awaiting payment", paid: "Paid", refunded: "Refunded", expired: "Expired" }
+    : { pending: "待支付", paid: "已支付", refunded: "已退款", expired: "已过期" };
   const buy = async (pkg) => {
     try {
       const order = await api.post("/api/orders", { package: pkg.id, provider: shop.providers[0] });
-      fill(status, notice(`订单已创建（${(order.amount_cents / 100).toFixed(2)} 元）：${order.payment.instructions || "请按支付页面提示完成支付"}`));
+      fill(status, notice(tr(`订单已创建（${(order.amount_cents / 100).toFixed(2)} 元）：${order.payment.instructions || "请按支付页面提示完成支付"}`, `Order created (CNY ${(order.amount_cents / 100).toFixed(2)}): ${order.payment.instructions || "follow the payment page"}`)));
     } catch (error) { fill(status, errorBox(error)); }
   };
   return h("div", { class: "stack" },
-    card("积分包",
-      shop.providers.length ? null : notice("在线支付尚未开通（测试期）：请使用兑换码或联系管理员充值。", "warn"),
+    card(tr("积分包", "Credit packs"),
+      shop.providers.length ? null : notice(tr("在线支付尚未开通（测试期）：请使用兑换码或联系管理员充值。", "Online payment is not open yet (beta): use a redeem code or ask an administrator."), "warn"),
       h("div", { class: "grid three" }, shop.packages.map((pkg) => h("div", { class: "tile" },
-        h("strong", { class: "big" }, pkg.label || `${pkg.credits} 积分`),
-        h("p", { class: "muted" }, `${(pkg.price_cents / 100).toFixed(2)} 元`),
-        h("button", { class: "primary", disabled: !shop.providers.length, onclick: () => buy(pkg) }, "购买"))))),
-    orders.length ? card("订单", h("table", { class: "table" }, h("tbody", {}, orders.map((o) => h("tr", {},
-      h("td", {}, fmtTime(o.created_at)), h("td", {}, `${o.credits} 积分`), h("td", {}, `${(o.amount_cents / 100).toFixed(2)} 元`),
-      h("td", {}, orderStatus[o.status] || o.status, o.refunded_credits ? `（已退 ${o.refunded_credits} 积分）` : "")))))) : null,
+        h("strong", { class: "big" }, (lang() === "en" ? pkg.label_en : pkg.label) || `${pkg.credits} ${tr("积分", "credits")}`),
+        h("p", { class: "muted" }, tr(`${(pkg.price_cents / 100).toFixed(2)} 元`, `CNY ${(pkg.price_cents / 100).toFixed(2)}`)),
+        h("button", { class: "primary", disabled: !shop.providers.length, onclick: () => buy(pkg) }, tr("购买", "Buy")))))),
+    orders.length ? card(tr("订单", "Orders"), h("table", { class: "table" }, h("tbody", {}, orders.map((o) => h("tr", {},
+      h("td", {}, fmtTime(o.created_at)), h("td", {}, `${o.credits} ${tr("积分", "credits")}`), h("td", {}, tr(`${(o.amount_cents / 100).toFixed(2)} 元`, `CNY ${(o.amount_cents / 100).toFixed(2)}`)),
+      h("td", {}, orderStatus[o.status] || o.status, o.refunded_credits ? tr(`（已退 ${o.refunded_credits} 积分）`, ` (${o.refunded_credits} credits refunded)`) : "")))))) : null,
     card(t("credits"),
       h("div", { class: "grid three" },
         h("div", { class: "tile" }, h("small", {}, t("balance")), h("strong", { class: "big" }, data.balance)),
@@ -772,16 +776,17 @@ async function pageCredits() {
         h("div", { class: "tile" }, h("small", {}, t("available")), h("strong", { class: "big" }, data.available))),
       h("form", { class: "row", onsubmit: async (e) => {
         e.preventDefault();
-        try { const r = await api.post("/api/credits/redeem", { code: code.value }); me = null; fill(status, notice(`已到账 ${r.credited} 积分`)); setTimeout(route, 800); }
+        try { const r = await api.post("/api/credits/redeem", { code: code.value }); me = null; fill(status, notice(tr(`已到账 ${r.credited} 积分`, `${r.credited} credits added`))); setTimeout(route, 800); }
         catch (error) { fill(status, errorBox(error)); }
-      } }, field("兑换码", code), h("button", { class: "primary", type: "submit" }, "兑换")),
+      } }, field(tr("兑换码", "Redeem code"), code), h("button", { class: "primary", type: "submit" }, tr("兑换", "Redeem"))),
       status),
-    card("积分流水", data.statement.length ? h("table", { class: "table" },
-      h("thead", {}, h("tr", {}, h("th", {}, "时间"), h("th", {}, "类型"), h("th", {}, "积分"), h("th", {}, "说明"))),
+    card(tr("积分流水", "Credit history"), data.statement.length ? h("table", { class: "table" },
+      h("thead", {}, h("tr", {}, h("th", {}, tr("时间", "Time")), h("th", {}, tr("类型", "Type")), h("th", {}, t("credits")), h("th", {}, tr("说明", "Note")))),
       h("tbody", {}, data.statement.map((row) => h("tr", {},
-        h("td", {}, fmtTime(row.created_at)), h("td", {}, { topup: "充值", grant: "赠送", redeem: "兑换", settle: "结算", refund: "退款", adjust: "调整", expire: "过期" }[row.kind] || row.kind),
+        h("td", {}, fmtTime(row.created_at)), h("td", {}, (lang() === "en" ? { topup: "Top-up", grant: "Grant", redeem: "Redeem", settle: "Settled", refund: "Refund", adjust: "Adjustment", expire: "Expired" }
+          : { topup: "充值", grant: "赠送", redeem: "兑换", settle: "结算", refund: "退款", adjust: "调整", expire: "过期" })[row.kind] || row.kind),
         h("td", { class: row.amount < 0 ? "neg" : "pos" }, row.amount > 0 ? `+${row.amount}` : row.amount),
-        h("td", {}, row.memo || (row.job_id ? h("a", { href: `#/jobs/${row.job_id}` }, "任务") : "")))))) : h("p", {}, t("empty"))));
+        h("td", {}, row.memo || (row.job_id ? h("a", { href: `#/jobs/${row.job_id}` }, tr("任务", "Job")) : "")))))) : h("p", {}, t("empty"))));
 }
 
 // ---------------------------------------------------------------- admin

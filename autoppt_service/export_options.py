@@ -47,6 +47,30 @@ SCENARIO_USE_WHEN: dict[str, str] = {
     "research_progress_report": "组会与阶段进展汇报：本期完成边界、当前证据、困难与下一步计划",
 }
 
+SCENARIO_LABELS_EN: dict[str, str] = {
+    "innovation_competition_defense": "Innovation competition pitch",
+    "thesis_defense": "Thesis defense",
+    "nsfc_application_defense": "NSFC grant application defense",
+    "nsfc_conclusion_defense": "NSFC / research project final review",
+    "academic_paper_report": "Paper reading / academic talk",
+    "research_progress_report": "Research progress / group meeting",
+}
+
+SCENARIO_USE_WHEN_EN: dict[str, str] = {
+    "innovation_competition_defense": "Student innovation and entrepreneurship contests: the real problem, the technical "
+                                      "innovation, prototype or experimental evidence, and the value of the application",
+    "thesis_defense": "Bachelor's, master's and doctoral defenses: research question, method, main results, "
+                      "your own contribution and the limitations",
+    "nsfc_application_defense": "NSFC and other grant application defenses: scientific question, core hypothesis, "
+                                "technical route, feasibility and risks",
+    "nsfc_conclusion_defense": "Final reviews of NSFC or other projects: plan versus completion, representative results, "
+                               "unfinished work and why",
+    "academic_paper_report": "Paper readings, literature reports and academic talks, separating what the figures show "
+                             "from your own interpretation",
+    "research_progress_report": "Group meetings and progress reports: what was finished, current evidence, "
+                                "difficulties and next steps",
+}
+
 STYLE_LABELS_ZH: dict[str, str] = {
     "academic_light": "学术浅色",
     "academic_minimal": "学术极简",
@@ -65,39 +89,48 @@ STYLE_USE_WHEN_ZH: dict[str, str] = {
     "clinical_clean": "生物医学、健康、化学、生命科学，以及实验证据密集的汇报",
 }
 
-SERVICES = {"new_deck": "新建 PPT", "vectorize": "PPT 矢量化"}
+SERVICES = {"new_deck": {"label": "新建 PPT", "label_en": "New deck"},
+            "vectorize": {"label": "PPT 矢量化", "label_en": "Make a deck editable"}}
 
 DELIVERY_TIERS: dict[str, dict[str, str]] = {
-    "planning_package": {"label": "规划包", "repo_tier": "Planning package"},
-    "image_deck": {"label": "图片版", "repo_tier": "Image-only deck"},
-    "native_editable": {"label": "原生可编辑版", "repo_tier": "native-priority-approved"},
+    "planning_package": {"label": "规划包", "label_en": "Planning package", "repo_tier": "Planning package"},
+    "image_deck": {"label": "图片版", "label_en": "Image deck", "repo_tier": "Image-only deck"},
+    "native_editable": {"label": "原生可编辑版", "label_en": "Native editable deck", "repo_tier": "native-priority-approved"},
 }
 
 FILE_ROLES: dict[str, dict[str, Any]] = {
-    "primary_source": {"label": "主资料（论文/报告/申请书）", "document": True},
-    "supplementary": {"label": "补充资料", "document": True},
-    "chart_data": {"label": "图表数据", "document": True},
-    "image_asset": {"label": "图片素材（实验图、照片、系统截图）", "document": False},
-    "keep_as_image": {"label": "原图保留（不让 ImageGen 重绘）", "document": False},
-    "logo": {"label": "Logo", "document": False},
-    "style_reference": {"label": "风格参考（参考 PPT/截图/学校模板）", "document": False},
-    "vectorize_source": {"label": "待矢量化文件", "document": False},
+    "primary_source": {"label": "主资料（论文/报告/申请书）", "label_en": "Main source (thesis, report, proposal)", "document": True},
+    "supplementary": {"label": "补充资料", "label_en": "Supplementary material", "document": True},
+    "chart_data": {"label": "图表数据", "label_en": "Chart data", "document": True},
+    "image_asset": {"label": "图片素材（实验图、照片、系统截图）", "label_en": "Images (figures, photos, screenshots)", "document": False},
+    "keep_as_image": {"label": "原图保留（不让 ImageGen 重绘）", "label_en": "Keep as is (never redrawn by ImageGen)", "document": False},
+    "logo": {"label": "Logo", "label_en": "Logo", "document": False},
+    "style_reference": {"label": "风格参考（参考 PPT/截图/学校模板）", "label_en": "Style reference (deck, screenshot, school template)", "document": False},
+    "vectorize_source": {"label": "待矢量化文件", "label_en": "Deck or pages to make editable", "document": False},
 }
 
-SLIDE_MODES = {"fixed": "固定页数", "range": "页数范围", "duration": "按演讲时长推算"}
-LANGUAGES = {"zh-CN": "中文", "en": "英文", "zh-CN+en": "中英双语"}
+SLIDE_MODES = {"fixed": {"label": "固定页数", "label_en": "Fixed number of slides"},
+               "range": {"label": "页数范围", "label_en": "Range of slides"},
+               "duration": {"label": "按演讲时长推算", "label_en": "From the talk length"}}
+LANGUAGES = {"zh-CN": {"label": "中文", "label_en": "Chinese"}, "en": {"label": "英文", "label_en": "English"},
+             "zh-CN+en": {"label": "中英双语", "label_en": "Chinese and English"}}
 AUDIENCES = ["答辩委员会", "评审专家", "导师与组员", "比赛评委", "投资人"]
-DENSITIES = {"medium_high": "中高（默认）", "medium": "中", "low": "低"}
-ASPECT_RATIOS = {"16:9": "16:9（默认）", "4:3": "4:3"}
+AUDIENCES_EN = ["Defense committee", "Review panel", "Supervisor and group", "Competition judges", "Investors"]
+DENSITIES = {"medium_high": {"label": "中高（默认）", "label_en": "Medium-high (default)"},
+             "medium": {"label": "中", "label_en": "Medium"}, "low": {"label": "低", "label_en": "Low"}}
+ASPECT_RATIOS = {"16:9": {"label": "16:9（默认）", "label_en": "16:9 (default)"}, "4:3": {"label": "4:3", "label_en": "4:3"}}
 FONT_POLICIES: dict[str, dict[str, Any]] = {
-    "office_native_yahei": {"label": "接受 Office 字体：微软雅黑", "office_native": True},
-    "office_native_dengxian": {"label": "接受 Office 字体：等线", "office_native": True},
-    "master_glyphs": {"label": "保留母版字形（仅规划包/图片版）", "office_native": False},
+    "office_native_yahei": {"label": "接受 Office 字体：微软雅黑", "label_en": "Accept an Office font: Microsoft YaHei",
+                            "office_native": True},
+    "office_native_dengxian": {"label": "接受 Office 字体：等线", "label_en": "Accept an Office font: DengXian",
+                               "office_native": True},
+    "master_glyphs": {"label": "保留母版字形（仅规划包/图片版）", "label_en": "Keep the master's lettering (planning package / image deck only)",
+                      "office_native": False},
 }
 CHART_MODES = {
-    "native_with_workbook": "原生图表（嵌入可编辑工作簿）",
-    "in_image": "图表作为页面图像的一部分",
-    "none": "不需要图表",
+    "native_with_workbook": {"label": "原生图表（嵌入可编辑工作簿）", "label_en": "Native charts (with an editable workbook)"},
+    "in_image": {"label": "图表作为页面图像的一部分", "label_en": "Charts as part of the slide image"},
+    "none": {"label": "不需要图表", "label_en": "No charts"},
 }
 RETENTION_DAYS = (3, 7, 30)
 
@@ -182,7 +215,9 @@ def scenario_options() -> list[dict[str, Any]]:
         option = {
             "id": key,
             "label": profile["label"],
+            "label_en": SCENARIO_LABELS_EN.get(key, key.replace("_", " ")),
             "use_when": SCENARIO_USE_WHEN.get(key, ""),
+            "use_when_en": SCENARIO_USE_WHEN_EN.get(key, ""),
             "default_slide_range": [low, high],
             "default_duration_seconds": seconds,
             "default_talk_minutes_range": [round(low * seconds / 60, 1), round(high * seconds / 60, 1)],
@@ -219,6 +254,7 @@ def export_options() -> dict[str, Any]:
         "slide_modes": _labelled(SLIDE_MODES),
         "languages": _labelled(LANGUAGES),
         "audiences": list(AUDIENCES),
+        "audiences_en": list(AUDIENCES_EN),
         "densities": _labelled(DENSITIES),
         "aspect_ratios": _labelled(ASPECT_RATIOS),
         "font_policies": _labelled(FONT_POLICIES),
@@ -233,6 +269,14 @@ def export_options() -> dict[str, Any]:
             "原生可编辑版与母版之间存在字体和局部图形差异，需经用户确认后接受；不承诺逐像素一致。",
             "原生可编辑版必须开启原生预览批准，并接受 Office 字体替代母版字形。",
             "不提供学校品牌风格；如需学校模板，请作为风格参考上传，并确认拥有 Logo/VI 使用权。",
+        ],
+        "notices_en": [
+            "The native editable deck differs from the masters in fonts and some graphics; you accept the differences "
+            "after reviewing a preview. Pixel-identical output is not promised.",
+            "The native editable deck always needs your approval of the native preview and Office fonts in place of "
+            "the masters' lettering.",
+            "No school-branded styles are offered; upload your school template as a style reference and confirm you "
+            "may use its logo and visual identity.",
         ],
     }
 
