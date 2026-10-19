@@ -278,6 +278,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         with anyio.CancelScope(shield=True):  # a client disconnect must not leave the transaction open
             await anyio.to_thread.run_sync(call, limiter=commit_limiter)
 
+    # Every route takes db with scope="function": FastAPI ends a yield dependency only after the response body
+    # has been sent, so a file download held its transaction (and SQLite's write lock: every transaction
+    # starts with BEGIN IMMEDIATE) for the whole transfer; one stalled client stopped the service for 20+
+    # minutes in the 48-hour soak (2026-10-19).  "function" ends it when the route returns.
     async def db() -> AsyncIterator[Session]:
         session = factory()
         try:
@@ -289,7 +293,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             await finish(session.close)
 
-    def current_user(authorization: str = Header(default=""), session: Session = Depends(db)) -> User:
+    def current_user(authorization: str = Header(default=""), session: Session = Depends(db, scope="function")) -> User:
         if not authorization.lower().startswith("bearer "):
             raise HTTPException(401, "missing bearer token")
         try:
@@ -306,7 +310,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(403, "admin only")
         return user
 
-    def current_worker(authorization: str = Header(default=""), session: Session = Depends(db)) -> Worker:
+    def current_worker(authorization: str = Header(default=""), session: Session = Depends(db, scope="function")) -> Worker:
         if not authorization.lower().startswith("bearer "):
             raise HTTPException(401, "missing worker token")
         worker = session.scalars(select(Worker).where(Worker.token_hash == hash_secret(authorization[7:]))).first()
@@ -393,7 +397,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return payload
 
     @app.get("/api/pricing")
-    def pricing(session: Session = Depends(db)) -> dict[str, Any]:
+    def pricing(session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         from autoppt_api.pricing import active_rules
 
         version, rules = active_rules(session)
@@ -435,7 +439,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/auth/code")
     def request_code(body: CodeRequest, request: Request, background: BackgroundTasks,
-                     session: Session = Depends(db)) -> dict[str, Any]:
+                     session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         key, email, phone = account_key(body)
         ip = request.client.host if request.client else ""
         if recent_codes(session, email=key) >= settings.login_codes_per_hour or recent_codes(session, ip=ip) >= settings.login_codes_per_hour * 4:
@@ -449,7 +453,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return result
 
     @app.post("/api/auth/login")
-    def login(body: LoginRequest, session: Session = Depends(db)) -> dict[str, Any]:
+    def login(body: LoginRequest, session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         key, email, phone = account_key(body)
         if not consume_login_code(session, key, body.code, max_attempts=settings.login_code_max_attempts):
             session.commit()  # keep the attempt count even though the request fails
@@ -481,7 +485,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/auth/wechat/callback")
     def wechat_callback(request: Request, code: str = Query(...), state: str = Query(...),
-                        session: Session = Depends(db)) -> Response:
+                        session: Session = Depends(db, scope="function")) -> Response:
         from autoppt_api.wechat import WeChatError, exchange_code
 
         try:
@@ -505,7 +509,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return response
 
     @app.post("/api/auth/wechat/exchange")
-    def wechat_exchange(body: TicketRequest, session: Session = Depends(db)) -> dict[str, Any]:
+    def wechat_exchange(body: TicketRequest, session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         try:
             user_id, ticket_secret = verify_url_token(settings.secret_key, body.ticket, purpose="wechat-ticket").split(".", 1)
         except (TokenError, ValueError) as exc:
@@ -516,7 +520,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return tokens_for(session, session.get(User, user_id))
 
     @app.post("/api/auth/refresh")
-    def refresh(body: RefreshRequest, session: Session = Depends(db)) -> dict[str, Any]:
+    def refresh(body: RefreshRequest, session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         try:
             return rotate_refresh(session, body.refresh_token, secret=settings.secret_key,
                                   access_ttl=settings.access_token_ttl_s, refresh_ttl=settings.refresh_token_ttl_s)
@@ -525,7 +529,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(401, str(exc)) from exc
 
     @app.post("/api/auth/logout")
-    def logout(body: RefreshRequest, session: Session = Depends(db)) -> dict[str, bool]:
+    def logout(body: RefreshRequest, session: Session = Depends(db, scope="function")) -> dict[str, bool]:
         from autoppt_api.models import RefreshToken
 
         try:
@@ -540,20 +544,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ------------------------------------------------------------ account and credits
 
     @app.get("/api/me")
-    def me(user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def me(user: User = Depends(current_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         account = ledger.user_account(session, user.id)
         return {"id": user.id, "email": user.email, "phone": user.phone, "wechat": bool(user.wechat_unionid),
                 "is_admin": user.is_admin, "locale": user.locale,
                 "credits": {"balance": account.balance, "available": ledger.available(session, account)}}
 
     @app.get("/api/credits")
-    def credits(user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def credits(user: User = Depends(current_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         account = ledger.user_account(session, user.id)
         return {"balance": account.balance, "available": ledger.available(session, account),
                 "frozen": ledger.frozen(session, account), "statement": ledger.statement(session, user.id)}
 
     @app.post("/api/credits/redeem")
-    def redeem(body: RedeemRequest, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def redeem(body: RedeemRequest, user: User = Depends(current_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         code = session.scalars(select(RedeemCode).where(RedeemCode.code_hash == hash_secret(body.code.strip().upper()))).first()
         if code is None or (code.expires_at and aware(code.expires_at) < now()):
             raise HTTPException(404, "invalid or expired code")
@@ -581,17 +585,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return providers[name]
 
     @app.get("/api/packages")
-    def list_packages(session: Session = Depends(db)) -> dict[str, Any]:
+    def list_packages(session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         return {"packages": payments_module.packages(session), "providers": sorted(providers)}
 
     @app.post("/api/orders")
-    def new_order(body: OrderBody, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def new_order(body: OrderBody, user: User = Depends(current_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         order, instructions = payments_module.create_order(session, user, body.package, provider_for(body.provider))
         return {"order_id": order.id, "credits": order.credits, "amount_cents": order.amount_cents, "currency": order.currency,
                 "status": order.status, "payment": instructions}
 
     @app.get("/api/orders")
-    def my_orders(user: User = Depends(current_user), session: Session = Depends(db)) -> list[dict[str, Any]]:
+    def my_orders(user: User = Depends(current_user), session: Session = Depends(db, scope="function")) -> list[dict[str, Any]]:
         return [{"id": o.id, "package": o.package, "credits": o.credits, "amount_cents": o.amount_cents, "currency": o.currency,
                  "status": o.status, "refunded_credits": o.refunded_credits, "refunded_cents": o.refunded_cents,
                  "created_at": iso(o.created_at), "paid_at": iso(o.paid_at)}
@@ -616,19 +620,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return await anyio.to_thread.run_sync(handle)
 
     @app.post("/api/admin/orders/{order_id}/refund")
-    def admin_refund(order_id: str, admin: User = Depends(admin_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def admin_refund(order_id: str, admin: User = Depends(admin_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         order = session.get(Order, order_id)
         if order is None:
             raise HTTPException(404, "order not found")
         return payments_module.refund_order(session, order, provider_for(order.provider), actor=admin.id)
 
     @app.post("/api/admin/reconcile")
-    def admin_reconcile(_admin: User = Depends(admin_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def admin_reconcile(_admin: User = Depends(admin_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         return payments_module.reconcile(session)
 
     @app.get("/api/admin/reports/margin")
     def admin_margin(days: int = Query(30, ge=1, le=366), _admin: User = Depends(admin_user),
-                     session: Session = Depends(db)) -> dict[str, Any]:
+                     session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         from autoppt_api.reports import margin_report
 
         return margin_report(session, days=days)
@@ -636,7 +640,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ------------------------------------------------------------ uploads and downloads
 
     @app.post("/api/uploads")
-    def init_upload(body: UploadInit, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def init_upload(body: UploadInit, user: User = Depends(current_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         if body.size > settings.max_upload_bytes:
             raise HTTPException(413, f"file larger than {settings.max_upload_bytes // (1024 * 1024)} MB")
         upload = UploadSession(user_id=user.id, filename=body.filename, expected_size=body.size,
@@ -682,7 +686,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"received": received, "expected": limit}
 
     @app.post("/api/uploads/{upload_id}/complete")
-    def complete_upload(upload_id: str, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def complete_upload(upload_id: str, user: User = Depends(current_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         upload = session.get(UploadSession, upload_id)
         if upload is None or upload.user_id != user.id:
             raise HTTPException(404, "upload not found")
@@ -709,7 +713,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"sha256": sha, "size": size, "kind": stored.sniffed_kind, "scan": stored.scan_status}
 
     @app.get("/api/files/{token}")
-    def download(token: str, session: Session = Depends(db)):
+    def download(token: str, session: Session = Depends(db, scope="function")):
         try:
             ref = verify_url_token(settings.secret_key, token, purpose="download")
         except TokenError as exc:
@@ -730,28 +734,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ------------------------------------------------------------ jobs
 
     @app.post("/api/jobs")
-    def new_job(body: DraftBody, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def new_job(body: DraftBody, user: User = Depends(current_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         return job_view(session, create_draft(session, user, body.request))
 
     @app.get("/api/jobs")
-    def list_jobs(user: User = Depends(current_user), session: Session = Depends(db)) -> list[dict[str, Any]]:
+    def list_jobs(user: User = Depends(current_user), session: Session = Depends(db, scope="function")) -> list[dict[str, Any]]:
         jobs = session.scalars(select(Job).where(Job.user_id == user.id, Job.state != "deleted").order_by(Job.created_at.desc()))
         return [job_view(session, job) for job in jobs]
 
     @app.get("/api/jobs/{job_id}")
-    def get_job(request: Request, job_id: str, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def get_job(request: Request, job_id: str, user: User = Depends(current_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         return job_view(session, own_job(job_id, user, session, request), detail=True)
 
     @app.put("/api/jobs/{job_id}")
-    def edit_job(request: Request, job_id: str, body: DraftBody, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def edit_job(request: Request, job_id: str, body: DraftBody, user: User = Depends(current_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         return job_view(session, update_draft(session, own_job(job_id, user, session, request), body.request))
 
     @app.post("/api/jobs/{job_id}/estimate")
-    def estimate(request: Request, job_id: str, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def estimate(request: Request, job_id: str, user: User = Depends(current_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         return estimate_job(session, user, own_job(job_id, user, session, request))
 
     @app.post("/api/jobs/{job_id}/submit")
-    def submit(request: Request, job_id: str, body: SubmitBody, user: User = Depends(current_user), session: Session = Depends(db),
+    def submit(request: Request, job_id: str, body: SubmitBody, user: User = Depends(current_user), session: Session = Depends(db, scope="function"),
                idempotency_key: str | None = Header(default=None)):
         job = own_job(job_id, user, session, request)
         if settings.terms_version and body.accepted_terms != settings.terms_version:
@@ -765,11 +769,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return idempotent(session, f"submit:{user.id}", idempotency_key, body.model_dump(), run)
 
     @app.post("/api/jobs/{job_id}/cancel")
-    def cancel(request: Request, job_id: str, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def cancel(request: Request, job_id: str, user: User = Depends(current_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         return job_view(session, cancel_job(session, own_job(job_id, user, session, request), actor=user.id))
 
     @app.delete("/api/jobs/{job_id}")
-    def delete_job(request: Request, job_id: str, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def delete_job(request: Request, job_id: str, user: User = Depends(current_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         from autoppt_api.lifecycle import delete_job_data
 
         job = own_job(job_id, user, session, request)
@@ -779,14 +783,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"deleted": True, "removed_blobs": removed}
 
     @app.get("/api/jobs/{job_id}/events")
-    def events(request: Request, job_id: str, after: int = 0, user: User = Depends(current_user), session: Session = Depends(db)) -> list[dict[str, Any]]:
+    def events(request: Request, job_id: str, after: int = 0, user: User = Depends(current_user), session: Session = Depends(db, scope="function")) -> list[dict[str, Any]]:
         own_job(job_id, user, session, request)
         rows = session.scalars(select(JobEvent).where(JobEvent.job_id == job_id, JobEvent.id > after).order_by(JobEvent.id).limit(500))
         return [{"id": e.id, "kind": e.kind, "message": e.message, "data": e.data, "at": iso(e.created_at)} for e in rows]
 
     @app.get("/api/jobs/{job_id}/events/stream")
     def stream(request: Request, job_id: str, after: int = 0, timeout: float = Query(25.0, ge=0, le=300), user: User = Depends(current_user),
-               session: Session = Depends(db)) -> StreamingResponse:
+               session: Session = Depends(db, scope="function")) -> StreamingResponse:
         own_job(job_id, user, session, request)
         session.commit()  # release the request's lock before the long-lived stream polls with its own sessions
 
@@ -807,7 +811,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return StreamingResponse(generate(), media_type="text/event-stream")
 
     @app.get("/api/jobs/{job_id}/checkpoint")
-    def get_checkpoint(request: Request, job_id: str, user: User = Depends(current_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def get_checkpoint(request: Request, job_id: str, user: User = Depends(current_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         job = own_job(job_id, user, session, request)
         checkpoint = open_checkpoint_for(session, job)
         if checkpoint is None:
@@ -826,7 +830,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/jobs/{job_id}/checkpoint/{checkpoint_id}/response")
     def respond(request: Request, job_id: str, checkpoint_id: str, body: ResponseBody, user: User = Depends(current_user),
-                session: Session = Depends(db)) -> dict[str, Any]:
+                session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         job = own_job(job_id, user, session, request)
         responder = "user" if job.user_id == user.id else "admin"
         answer_checkpoint(session, user, job, checkpoint_id, body.model_dump(), responder=responder)
@@ -835,7 +839,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ------------------------------------------------------------ worker API
 
     @app.post("/api/worker/lease")
-    def lease(body: LeaseBody, worker: Worker = Depends(current_worker), session: Session = Depends(db)):
+    def lease(body: LeaseBody, worker: Worker = Depends(current_worker), session: Session = Depends(db, scope="function")):
         if body.template_version:
             worker.template_version = body.template_version
         if worker.status != "active":
@@ -864,7 +868,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/worker/jobs/{job_id}/heartbeat")
     def worker_heartbeat(job_id: str, body: HeartbeatBody, worker: Worker = Depends(current_worker),
-                         session: Session = Depends(db)) -> dict[str, Any]:
+                         session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         job = heartbeat(session, leased(job_id, worker, session), worker, body.lease_token,
                         timeout_s=settings.lease_timeout_s, progress=body.progress)
         return {"lease_expires_at": iso(job.lease_expires_at), "state": job.state, "cancelled": job.state == "cancelled"}
@@ -900,7 +904,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/worker/jobs/{job_id}/model-token")
     def worker_model_token(job_id: str, body: ModelTokenBody, worker: Worker = Depends(current_worker),
-                           session: Session = Depends(db)) -> dict[str, Any]:
+                           session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         """A model token for this lease (API-key mode): the job's remaining input-token budget, a few hours long."""
         from autoppt_api.services import require_lease
 
@@ -923,7 +927,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "budget_input_tokens": remaining, "expires_at": iso(expires)}
 
     @app.post("/api/worker/jobs/{job_id}/complete")
-    def worker_complete(job_id: str, body: PhaseReport, worker: Worker = Depends(current_worker), session: Session = Depends(db),
+    def worker_complete(job_id: str, body: PhaseReport, worker: Worker = Depends(current_worker), session: Session = Depends(db, scope="function"),
                         idempotency_key: str | None = Header(default=None)):
         job = leased(job_id, worker, session)
 
@@ -937,7 +941,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return idempotent(session, f"worker:{worker.id}:{job_id}", idempotency_key, body.model_dump(), run)
 
     @app.post("/api/worker/jobs/{job_id}/fail")
-    def worker_fail(job_id: str, body: FailReport, worker: Worker = Depends(current_worker), session: Session = Depends(db),
+    def worker_fail(job_id: str, body: FailReport, worker: Worker = Depends(current_worker), session: Session = Depends(db, scope="function"),
                     idempotency_key: str | None = Header(default=None)):
         job = leased(job_id, worker, session)
         return idempotent(session, f"worker-fail:{worker.id}:{job_id}", idempotency_key, body.model_dump(),
@@ -955,7 +959,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return session.scalars(select(User).where(column == value)).first()
 
     @app.post("/api/admin/credits/adjust")
-    def admin_adjust(body: AdjustBody, admin: User = Depends(admin_user), session: Session = Depends(db),
+    def admin_adjust(body: AdjustBody, admin: User = Depends(admin_user), session: Session = Depends(db, scope="function"),
                      idempotency_key: str | None = Header(default=None)) -> dict[str, Any]:
         user = find_account(session, body.email)
         if user is None:
@@ -972,7 +976,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"balance": account.balance, "available": ledger.available(session, account)}
 
     @app.post("/api/admin/redeem-codes")
-    def admin_codes(body: RedeemCodesBody, admin: User = Depends(admin_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def admin_codes(body: RedeemCodesBody, admin: User = Depends(admin_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         codes = []
         for _ in range(body.count):
             code = "-".join(secrets.token_hex(2).upper() for _ in range(4))
@@ -984,7 +988,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"codes": codes, "note": "shown once; only hashes are stored"}
 
     @app.post("/api/admin/workers")
-    def admin_worker(body: WorkerBody, admin: User = Depends(admin_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def admin_worker(body: WorkerBody, admin: User = Depends(admin_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         token = secrets.token_urlsafe(32)
         worker = Worker(name=body.name, token_hash=hash_secret(token), capabilities=body.capabilities)
         session.add(worker)
@@ -993,7 +997,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"worker_id": worker.id, "token": token, "note": "shown once; only the hash is stored"}
 
     @app.get("/api/admin/users")
-    def admin_users(email: str = "", _admin: User = Depends(admin_user), session: Session = Depends(db)) -> list[dict[str, Any]]:
+    def admin_users(email: str = "", _admin: User = Depends(admin_user), session: Session = Depends(db, scope="function")) -> list[dict[str, Any]]:
         query = select(User).order_by(User.created_at.desc()).limit(100)
         if email:
             needle = email.strip().lower()
@@ -1008,13 +1012,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return result
 
     @app.get("/api/admin/workers")
-    def admin_workers(_admin: User = Depends(admin_user), session: Session = Depends(db)) -> list[dict[str, Any]]:
+    def admin_workers(_admin: User = Depends(admin_user), session: Session = Depends(db, scope="function")) -> list[dict[str, Any]]:
         return [{"id": w.id, "name": w.name, "status": w.status, "capabilities": w.capabilities, "template_version": w.template_version,
                  "last_heartbeat_at": iso(w.last_heartbeat_at) if w.last_heartbeat_at else None}
                 for w in session.scalars(select(Worker))]
 
     @app.put("/api/admin/pricing")
-    def admin_pricing(body: PricingBody, admin: User = Depends(admin_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def admin_pricing(body: PricingBody, admin: User = Depends(admin_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         from autoppt_api.pricing import DEFAULT_RULES
 
         missing = sorted(set(DEFAULT_RULES) - set(body.rules))
@@ -1028,7 +1032,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"version": int(latest) + 1}
 
     @app.get("/api/admin/jobs")
-    def admin_jobs(state: str | None = None, _admin: User = Depends(admin_user), session: Session = Depends(db)) -> list[dict[str, Any]]:
+    def admin_jobs(state: str | None = None, _admin: User = Depends(admin_user), session: Session = Depends(db, scope="function")) -> list[dict[str, Any]]:
         query = select(Job).order_by(Job.created_at.desc()).limit(200)
         if state:
             query = query.where(Job.state == state)
@@ -1036,14 +1040,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/admin/jobs/{job_id}/resume")
     def admin_resume(job_id: str, to_state: str = Query(...), admin: User = Depends(admin_user),
-                     session: Session = Depends(db)) -> dict[str, Any]:
+                     session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         job = session.get(Job, job_id)
         if job is None:
             raise HTTPException(404, "job not found")
         return job_view(session, resume_blocked(session, job, actor=admin.id, previous_state=to_state))
 
     @app.post("/api/admin/jobs/{job_id}/refund")
-    def admin_job_refund(job_id: str, body: JobRefundBody, admin: User = Depends(admin_user), session: Session = Depends(db),
+    def admin_job_refund(job_id: str, body: JobRefundBody, admin: User = Depends(admin_user), session: Session = Depends(db, scope="function"),
                          idempotency_key: str | None = Header(default=None)) -> dict[str, Any]:
         """Return settled credits for one job (a poor delivery, a goodwill gesture); never more than it earned."""
         job = session.get(Job, job_id)
@@ -1062,13 +1066,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"job_id": job_id, "refundable": ledger.job_revenue(session, job_id), "balance": account.balance}
 
     @app.get("/api/admin/lessons")
-    def admin_lessons(status: str = "pending", _admin: User = Depends(admin_user), session: Session = Depends(db)) -> list[dict[str, Any]]:
+    def admin_lessons(status: str = "pending", _admin: User = Depends(admin_user), session: Session = Depends(db, scope="function")) -> list[dict[str, Any]]:
         return [{"id": l.id, "job_id": l.job_id, "payload": l.payload, "status": l.status}
                 for l in session.scalars(select(LessonCandidate).where(LessonCandidate.status == status))]
 
     @app.post("/api/admin/lessons/{lesson_id}")
     def admin_review_lesson(lesson_id: str, body: LessonReview, admin: User = Depends(admin_user),
-                            session: Session = Depends(db)) -> dict[str, Any]:
+                            session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         lesson = session.get(LessonCandidate, lesson_id)
         if lesson is None:
             raise HTTPException(404, "lesson not found")
@@ -1077,18 +1081,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"id": lesson.id, "status": lesson.status}
 
     @app.get("/api/admin/health")
-    def admin_health(_admin: User = Depends(admin_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def admin_health(_admin: User = Depends(admin_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         from autoppt_api.monitoring import health
 
         return health(session, lease_timeout_s=settings.lease_timeout_s)
 
     @app.get("/api/admin/ledger/check")
-    def admin_ledger(_admin: User = Depends(admin_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def admin_ledger(_admin: User = Depends(admin_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         issues = ledger.check_ledger(session)
         return {"ok": not issues, "issues": issues}
 
     @app.get("/api/admin/gateway")
-    def admin_gateway(_admin: User = Depends(admin_user), session: Session = Depends(db)) -> dict[str, Any]:
+    def admin_gateway(_admin: User = Depends(admin_user), session: Session = Depends(db, scope="function")) -> dict[str, Any]:
         tokens = session.scalars(select(ModelToken).order_by(ModelToken.created_at.desc()).limit(100)).all()
         return {"enabled": bool(key_pool), "upstream": settings.gateway_upstream_url, "keys": key_pool.stats(),
                 "job_budget_input_tokens": settings.gateway_job_budget_input_tokens,
@@ -1177,7 +1181,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                  headers={k: v for k in ("content-type", "x-request-id") if (v := answer.headers.get(k))})
 
     @app.get("/api/admin/audit")
-    def admin_audit(limit: int = Query(100, le=1000), _admin: User = Depends(admin_user), session: Session = Depends(db)) -> list[dict[str, Any]]:
+    def admin_audit(limit: int = Query(100, le=1000), _admin: User = Depends(admin_user), session: Session = Depends(db, scope="function")) -> list[dict[str, Any]]:
         return [{"id": a.id, "actor_type": a.actor_type, "actor_id": a.actor_id, "action": a.action, "target": a.target,
                  "data": a.data, "at": iso(a.created_at)}
                 for a in session.scalars(select(AuditLog).order_by(AuditLog.id.desc()).limit(limit))]

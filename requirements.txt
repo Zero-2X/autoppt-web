@@ -18,7 +18,8 @@ pillow-heif
 alembic
 # Fernet encryption of stored uploads (AUTOPPT_API_STORAGE_KEY).
 cryptography
-fastapi
+# >=0.121 for Depends(scope="function"): the database session must end before a response streams.
+fastapi>=0.121
 httpx
 pydantic
 sqlalchemy
