@@ -255,7 +255,9 @@ def lease_job(session: Session, worker: Worker, *, timeout_s: int) -> Job | None
     capabilities = set(worker.capabilities or [])
     candidates = session.scalars(
         select(Job)
-        .where(Job.pending_phase.is_not(None), Job.state.not_in(TERMINAL_STATES))
+        # An explicit IN uses ix_jobs_queue; "IS NOT NULL" made SQLite scan every job on every poll
+        # (91 ms per lease on a 12,000-job soak database, under the write lock; 0.27 ms with the index).
+        .where(Job.pending_phase.in_(list(PHASE_CAPABILITY)), Job.state.not_in(TERMINAL_STATES))
         .order_by(Job.submitted_at)
         .limit(50)
     ).all()

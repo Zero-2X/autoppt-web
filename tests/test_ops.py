@@ -277,3 +277,17 @@ def test_health_separates_retry_backoff_from_account_limits(api, world):
         session.commit()
         kinds = {a["kind"] for a in health(session)["alerts"]}
     assert "retry_backoff" in kinds and "account_limits" not in kinds
+
+
+def test_lease_query_uses_the_queue_index(api, world):
+    # Found by the 48-hour soak: "pending_phase IS NOT NULL" scanned every job on every lease poll.
+    from sqlalchemy import text
+
+    from autoppt_api.services import PHASE_CAPABILITY, PHASE_STATES
+
+    assert set(PHASE_STATES) == set(PHASE_CAPABILITY)  # every pending phase is in the indexed IN list
+    names = ", ".join(f"'{p}'" for p in PHASE_CAPABILITY)
+    with api.app.state.session_factory() as session:
+        plan = session.execute(text(f"EXPLAIN QUERY PLAN SELECT id FROM jobs WHERE pending_phase IN ({names}) "
+                                    "AND state NOT IN ('delivered') ORDER BY submitted_at LIMIT 50")).all()
+    assert any(row[-1].startswith("SEARCH jobs USING INDEX") for row in plan), plan  # never "SCAN jobs"

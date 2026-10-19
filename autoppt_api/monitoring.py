@@ -31,7 +31,10 @@ THRESHOLDS = {
 def health(session: Session, *, lease_timeout_s: int = 900) -> dict[str, Any]:
     current = now()
     alerts: list[dict[str, Any]] = []
-    runnable = session.scalars(select(Job).where(Job.pending_phase.is_not(None), Job.lease_worker_id.is_(None))).all()
+    from autoppt_api.services import PHASE_CAPABILITY
+
+    runnable = session.scalars(select(Job).where(Job.pending_phase.in_(list(PHASE_CAPABILITY)),  # indexed, unlike IS NOT NULL
+                                                 Job.lease_worker_id.is_(None))).all()
     waiting = [job for job in runnable if not job.not_before or aware(job.not_before) <= current]
     deferred = [job for job in runnable if job.not_before and aware(job.not_before) > current]
     oldest = min((aware(job.updated_at) for job in waiting), default=None)
