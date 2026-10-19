@@ -59,4 +59,8 @@ Worker 模板 `real-recon-20261017b`。记录追加在 `D:/autoppt-jobs/samples/
 - **PowerPoint 在本机起不来**（13:12 起）：COM 报 0x80080005，系统日志 DCOM 10010（服务器没有按时注册），POWERPNT.EXE 正常启动 4 秒内以代码 15 退出，
   `/safe` 安全模式能启动；Click-to-Run 显示 `ApplyInitiated=1`。没有改 Office 设置或加载项，需要用户处理。
 - 新增 PowerPoint 预检：重建开始前先渲染一页测试文件，失败就延后、不启动代理。本次实测：任务延后，0 次代理会话。
+- 13:34 用户手动打开 PowerPoint 并处理了提示，桌面启动恢复，但自动化仍然起不来：系统日志 DCOM 10000，启动
+  `POWERPNT.EXE /AUTOMATION -Embedding` 时报 0x80070005（拒绝访问），之后是 10010 超时；从 Worker 进程直接启动（含经 explorer 启动）
+  仍在 4 秒内以代码 15 退出。排除了：管理员权限不一致（两边都不是管理员）、环境变量、作业对象的 UI 限制、48 小时压测（mock，不用 Office）。
+  没有改动 Office、注册表或系统设置；建议用户做 Office 快速修复或重启（重启会中断正在跑的 48 小时压测）。
 
