@@ -417,3 +417,16 @@ def test_visible_text_ocr_misreads_is_confirmed_by_ink_and_covered_text_is_not(t
     errors = render_visibility_errors({"S01": tmp_path / "covered.png"}, targets, ocr=ocr, masters=masters,
                                       work_dir=tmp_path / "b")
     assert errors and "研究背景" in errors[0]
+
+
+def test_unavailable_powerpoint_defers_before_any_agent_session(job_at_reconstruct, monkeypatch):
+    # Measured 2026-10-19: PowerPoint stopped starting (DCOM 10010) while the agent could still run.
+    import autoppt_service.vectorize as vectorize
+
+    def broken(pptx, out_dir):
+        raise RuntimeError("New-Object : COM class factory failed: 80080005 CO_E_SERVER_EXEC_FAILURE")
+
+    monkeypatch.setattr(vectorize, "powerpoint_renderer", broken)
+    result = job_at_reconstruct["reconstruct"]()
+    assert result.get("deferred") is True and "PowerPoint is not available" in result["reason"]
+    assert not (job_at_reconstruct["home"] / "calls.txt").exists()  # no agent session started

@@ -369,6 +369,28 @@ def locate_unopenable_slides(pptx: Path, renderer: Renderer, slide_ids: Sequence
     return failing
 
 
+def office_preflight(renderer: Renderer, work_dir: Path) -> str | None:
+    """None when the renderer can render a one-slide deck, else the error.
+
+    Measured 2026-10-19: PowerPoint stopped starting on the Worker (DCOM 10010, exit code 15) while
+    safe mode still worked.  Without this check an agent would build a deck and then be told that no
+    slide opens, and spend sessions repairing a deck that is fine.
+    """
+    from pptx import Presentation
+
+    folder = Path(work_dir) / "office-preflight"
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.mkdir(parents=True)
+    deck = Presentation()
+    deck.slides.add_slide(deck.slide_layouts[6]).shapes.add_textbox(0, 0, 914400, 457200).text_frame.text = "preflight"
+    deck.save(folder / "preflight.pptx")
+    try:
+        renderer(folder / "preflight.pptx", folder / "render")
+    except Exception as exc:  # noqa: BLE001 - any failure means the Worker cannot audit a deck now
+        return str(exc)[-400:]
+    return None
+
+
 def render_with_office(job_dir: Path, renderer: Renderer, slide_ids: Sequence[str]) -> dict[str, Path]:
     """PowerPoint renders of the delivered deck, named like the masters."""
     job_dir = Path(job_dir)
@@ -441,6 +463,10 @@ def run_reconstruct_agent(
     chart_data = read_json(job_dir / EVIDENCE_DIR / "chart-data.json") or {}
     require_chart = request["delivery"].get("charts") == "native_with_workbook" and bool(chart_data.get("tables")) \
         and request.get("service") != "vectorize"
+    unavailable = office_preflight(renderer, job_dir / "workspace" / "reconstruct")
+    if unavailable:
+        # The Worker's environment, not the deck: retry later on a Worker whose PowerPoint starts.
+        raise ReconstructDeferred(f"PowerPoint is not available on this Worker: {unavailable}", None, list(initial_issues))
     pool = ProfilePool(profiles)
     issues: list[str] = list(initial_issues)  # e.g. the audit errors of a withdrawn preview
     attempts: list[dict[str, Any]] = []

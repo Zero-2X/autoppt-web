@@ -48,3 +48,15 @@ Worker 模板 `real-recon-20261017b`。记录追加在 `D:/autoppt-jobs/samples/
   （`deck-plan.json`）和出图提示词**。现在所有新建任务都打包 `deck-plan.json`、`outline-preview.md`，真实运行还打包
   `image-prompts.json`。国自然样例是修复前打的包，保留作为问题证据。
 
+## 2026-10-19：矢量化样例作废，换成真实的生成图片页
+
+- 用户 CP3 判定（原话，记为 `revise`）：“质量太差了，这根本就不是从生成图片然后矢量化的ppt的效果，这样是不可行的”。
+  原因在样例本身：`vectorize-image-deck` 是脚本画的 3 页纯色框加一行字，不是生成图片；它通过 CP3 不能说明真实矢量化可行。任务已标记 `cancelled`。
+- 新样例 `_samples/vectorize-imagegen-deck/`：J-plan-real-001 的 5 张 ImageGen 母版（封面照片、地图与时间轴、三步方法图、表格与消融、贡献地图），
+  深度 `text_shapes_charts`。任务 `vectorize-imagegen-img-202610191327`（以 5 张图片上传；同内容的 PPTX 版本 `vectorize-imagegen-202610191312` 卡在 PowerPoint 上）。
+- CP-V：真实页面的 OCR 明显更差：漏掉封面两行标题和“示例学生”、表格里的 18/12、图例和编号；拆字（雷卜推、管网鲒构）、全角逗号和中点、
+  项目符号残留、地图噪声行。Claude 按用户授权逐页核对后回复（`admin`）：改 31 行、删 4 行、补 21 行。
+- **PowerPoint 在本机起不来**（13:12 起）：COM 报 0x80080005，系统日志 DCOM 10010（服务器没有按时注册），POWERPNT.EXE 正常启动 4 秒内以代码 15 退出，
+  `/safe` 安全模式能启动；Click-to-Run 显示 `ApplyInitiated=1`。没有改 Office 设置或加载项，需要用户处理。
+- 新增 PowerPoint 预检：重建开始前先渲染一页测试文件，失败就延后、不启动代理。本次实测：任务延后，0 次代理会话。
+
