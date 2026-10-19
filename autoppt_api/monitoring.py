@@ -95,8 +95,9 @@ def health(session: Session, *, lease_timeout_s: int = 900) -> dict[str, Any]:
 def job_cost_alerts(session: Session, since) -> list[str]:
     """Jobs running or finished since ``since`` whose tokens or cost run past the thresholds.
 
-    One grouped query over usage records: measured 2026-10-19 on a day-old soak database (about 9,000 jobs),
-    computing each job's cost separately took 8 s under SQLite's write lock and stalled every request."""
+    One grouped query over usage records that returns only jobs able to trip an alert: measured 2026-10-19 on
+    soak databases, computing every job's cost took 8 s (9,000 jobs) and then 2 s (11,000 jobs, all rows fetched)
+    under SQLite's write lock, stalling every request."""
     from autoppt_api.pricing import DEFAULT_RULES, active_rules
 
     _, rules = active_rules(session)
@@ -104,28 +105,25 @@ def job_cost_alerts(session: Session, since) -> list[str]:
     value = float(rules.get("credit_value_cents", DEFAULT_RULES["credit_value_cents"]))
     recent = select(UsageRecord.job_id).where(UsageRecord.created_at >= since).distinct()  # jobs that spent recently
     agent = UsageRecord.kind == "agent_turn"
+    input_sum = func.coalesce(func.sum(case((agent, UsageRecord.input_tokens), else_=0)), 0)
+    cached_sum = func.coalesce(func.sum(case((agent, UsageRecord.cached_input_tokens), else_=0)), 0)
+    output_sum = func.coalesce(func.sum(case((agent, UsageRecord.output_tokens), else_=0)), 0)
+    office_sum = func.coalesce(func.sum(case((UsageRecord.kind == "office", UsageRecord.seconds), else_=0)), 0)
+    spent = ((input_sum - cached_sum) * rates.get("input_per_million_cents", 0) + cached_sum * rates.get("cached_input_per_million_cents", 0)
+             + output_sum * rates.get("output_per_million_cents", 0)) / 1_000_000.0 + office_sum / 60.0 * rates.get("office_minute_cents", 0)
+    # No estimate is below the base fee, so a job cannot overrun before it spends 1.5x that: only those rows come back.
+    floor = float(rules.get("base", DEFAULT_RULES["base"])) * value * THRESHOLDS["estimate_overrun"]
     rows = session.execute(
-        select(UsageRecord.job_id,
-               func.coalesce(func.sum(case((agent, UsageRecord.input_tokens), else_=0)), 0),
-               func.coalesce(func.sum(case((agent, UsageRecord.cached_input_tokens), else_=0)), 0),
-               func.coalesce(func.sum(case((agent, UsageRecord.output_tokens), else_=0)), 0),
-               func.coalesce(func.sum(case((UsageRecord.kind == "office", UsageRecord.seconds), else_=0)), 0))
-        .where(UsageRecord.job_id.in_(recent)).group_by(UsageRecord.job_id)).all()
-    priced = any(rates.get(key, 0) for key in ("input_per_million_cents", "cached_input_per_million_cents",
-                                                 "output_per_million_cents", "office_minute_cents"))
-    estimates = dict(session.execute(select(Job.id, Job.estimate).where(Job.id.in_(recent))).all()) if priced else {}
+        select(UsageRecord.job_id, input_sum, spent).where(UsageRecord.job_id.in_(recent)).group_by(UsageRecord.job_id)
+        .having((input_sum > THRESHOLDS["job_input_tokens"]) | (spent > floor))).all()
+    estimates = dict(session.execute(select(Job.id, Job.estimate).where(Job.id.in_([row[0] for row in rows]))).all()) if rows else {}
     found = []
-    for job_id, input_tokens, cached, output, office_seconds in rows:
+    for job_id, input_tokens, cost in rows:
         if input_tokens > THRESHOLDS["job_input_tokens"]:
             found.append(f"{job_id[:8]} used {input_tokens / 1e6:.1f} M input tokens")
-        if not priced:
-            continue
-        spent = ((input_tokens - cached) * rates.get("input_per_million_cents", 0) + cached * rates.get("cached_input_per_million_cents", 0)
-                 + output * rates.get("output_per_million_cents", 0)) / 1_000_000 + office_seconds / 60 * rates.get("office_minute_cents", 0)
-        estimate = estimates.get(job_id) or {}
-        budget = float(estimate.get("total") or 0) * value
-        if budget and spent > budget * THRESHOLDS["estimate_overrun"]:
-            found.append(f"{job_id[:8]} cost {spent / 100:.2f} CNY against an estimate worth {budget / 100:.2f} CNY")
+        budget = float((estimates.get(job_id) or {}).get("total") or 0) * value
+        if budget and cost > budget * THRESHOLDS["estimate_overrun"]:
+            found.append(f"{job_id[:8]} cost {cost / 100:.2f} CNY against an estimate worth {budget / 100:.2f} CNY")
     return found
 
 
