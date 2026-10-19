@@ -8,6 +8,12 @@ kind ``image_gen.generation`` with an ``exec-`` id, the prompt the agent passed
 ``ig_`` records, so the service validates host records here, without changing
 that repository.
 
+Through an API-key provider (measured 2026-10-19 with a Responses-compatible proxy) the same built-in
+tool is recorded as a ``response_item`` of type ``image_generation_call`` with an ``ig_`` id, the
+prompt (``revised_prompt``) and the base64 PNG, and no saved copy.  Both forms are accepted; the
+sidecar records which form and which ``model_provider`` produced the image, so a master made through
+a proxy is never presented as a direct-account image.
+
 A host record is accepted only when its thread matches the rollout file, the
 saved copy (if present) is named after the thread and id and has the same
 bytes, and the decoded payload hash becomes the slide image hash.  The sidecar
@@ -55,9 +61,13 @@ def _write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+RESPONSE_IMAGEGEN_TYPE = "image_generation_call"
+
+
 def host_records(rollout: Path) -> list[dict[str, Any]]:
-    """Return every ``image_gen.generation`` record in rollout order."""
+    """Return every built-in image_gen record (host Extension or Responses call) in rollout order."""
     records: list[dict[str, Any]] = []
+    session: dict[str, Any] = {}
     with rollout.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, 1):
             try:
@@ -65,7 +75,30 @@ def host_records(rollout: Path) -> list[dict[str, Any]]:
             except json.JSONDecodeError:
                 continue
             payload = event.get("payload")
-            if not isinstance(payload, dict) or payload.get("type") != "item_completed":
+            if not isinstance(payload, dict):
+                continue
+            if event.get("type") == "session_meta":
+                session = payload
+                continue
+            if event.get("type") == "response_item" and payload.get("type") == RESPONSE_IMAGEGEN_TYPE:
+                passthrough = payload.get("internal_chat_message_metadata_passthrough") or {}
+                records.append(
+                    {
+                        "timestamp": event.get("timestamp"),
+                        "line_number": line_number,
+                        "id": str(payload.get("id") or ""),
+                        "status": str(payload.get("status") or ""),
+                        "revised_prompt": str(payload.get("revised_prompt") or ""),
+                        "result": str(payload.get("result") or ""),
+                        "thread_id": str(session.get("id") or ""),
+                        "turn_id": str(passthrough.get("turn_id") or ""),
+                        "saved_path": "",
+                        "record_kind": "responses-image-generation-call",
+                        "model_provider": str(session.get("model_provider") or ""),
+                    }
+                )
+                continue
+            if payload.get("type") != "item_completed":
                 continue
             item = payload.get("item")
             if not (isinstance(item, dict) and item.get("type") == "Extension" and item.get("kind") == HOST_IMAGEGEN_KIND):
@@ -81,16 +114,21 @@ def host_records(rollout: Path) -> list[dict[str, Any]]:
                     "thread_id": str(payload.get("thread_id") or ""),
                     "turn_id": str(payload.get("turn_id") or ""),
                     "saved_path": str(item.get("savedPath") or ""),
+                    "record_kind": "codex-host-extension",
+                    "model_provider": str(session.get("model_provider") or ""),
                 }
             )
     return records
+
+
+ACCEPTED_ID_PREFIXES = ("exec-", "ig_")
 
 
 def completed_host_records(rollout: Path) -> list[tuple[int, dict[str, Any]]]:
     return [
         (index, record)
         for index, record in enumerate(host_records(rollout))
-        if record["status"].lower() == "completed" and record["id"].startswith("exec-") and record["result"]
+        if record["status"].lower() == "completed" and record["id"].startswith(ACCEPTED_ID_PREFIXES) and record["result"]
     ]
 
 
@@ -133,7 +171,8 @@ def _host_evidence(record: dict[str, Any], image_bytes: bytes, rollout: Path) ->
         if saved_present and not saved_match:
             issues.append(f"host_saved_image_sha256_mismatch:{imagegen_id}")
     evidence = {
-        "kind": HOST_IMAGEGEN_KIND,
+        "kind": HOST_IMAGEGEN_KIND if record.get("record_kind") == "codex-host-extension" else RESPONSE_IMAGEGEN_TYPE,
+        "model_provider": record.get("model_provider", ""),
         "thread_id": thread_id,
         "turn_id": record["turn_id"],
         "saved_path": record["saved_path"],
@@ -205,7 +244,8 @@ def ingest_host_record(
         "generation_mode": DIRECT_FINAL_GENERATION_MODE,
         "id": record["id"],
         "imagegen_id": record["id"],
-        "record_kind": "codex-host-extension",
+        "record_kind": record.get("record_kind", "codex-host-extension"),
+        "model_provider": record.get("model_provider", ""),
         "provenance_strength": "validated-host-record",
         "model": "unconfirmed",
         "session_jsonl": str(rollout.resolve()),
@@ -265,7 +305,7 @@ def verify_masters(handoff_path: Path) -> dict[str, Any]:
         digest = _sha256_file(image)
         host = sidecar.get("host_record") if isinstance(sidecar.get("host_record"), dict) else {}
         if not (
-            str(sidecar.get("id") or "").startswith("exec-")
+            str(sidecar.get("id") or "").startswith(ACCEPTED_ID_PREFIXES)
             and sidecar.get("provenance_strength") == "validated-host-record"
             and sidecar.get("sha256") == digest
             and host.get("result_sha256") == digest

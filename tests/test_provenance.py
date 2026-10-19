@@ -125,3 +125,24 @@ def test_repository_gate_accepts_sidecar_in_normal_mode(tmp_path: Path) -> None:
     ingest_host_record(handoff, "S01", rollout=_rollout(tmp_path), record_index=0)
     records = gate.provenance_records([tmp_path / "assets" / "generated"])
     assert [(record["accepted"], record["strength"]) for record in records] == [(True, "builtin-imagegen")]
+
+
+def test_responses_image_generation_call_through_a_provider_is_accepted_and_labelled(tmp_path: Path) -> None:
+    # Measured 2026-10-19: through the zpproxy provider the built-in tool is recorded as a response_item
+    # ``image_generation_call`` with an ``ig_`` id and no saved copy; the thread comes from session_meta.
+    handoff = _handoff(tmp_path)
+    lines = [
+        {"type": "session_meta", "payload": {"id": THREAD_ID, "model_provider": "zpproxy"}},
+        {"type": "response_item", "timestamp": "2026-10-19T05:59:39Z", "payload": {
+            "type": "image_generation_call", "id": "ig_0d98e568bf4f", "status": "completed",
+            "revised_prompt": SLIDE_PROMPT, "result": base64.b64encode(PNG_1X1).decode("ascii"),
+            "internal_chat_message_metadata_passthrough": {"turn_id": "t1"}}},
+    ]
+    rollout = tmp_path / f"rollout-2026-10-19T13-59-00-{THREAD_ID}.jsonl"
+    rollout.write_text("\n".join(json.dumps(line, ensure_ascii=False) for line in lines) + "\n", encoding="utf-8")
+    assert [index for index, _ in completed_host_records(rollout)] == [0]
+    ingest_host_record(handoff, "S01", rollout=rollout, record_index=0)
+    sidecar = json.loads((tmp_path / "assets" / "generated" / "S01-pipeline.json").read_text(encoding="utf-8"))
+    assert sidecar["id"].startswith("ig_") and sidecar["record_kind"] == "responses-image-generation-call"
+    assert sidecar["model_provider"] == "zpproxy" and sidecar["host_record"]["model_provider"] == "zpproxy"
+    assert verify_masters(handoff)["verdict"] == "pass"
