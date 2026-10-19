@@ -64,3 +64,25 @@ Worker 模板 `real-recon-20261017b`。记录追加在 `D:/autoppt-jobs/samples/
   仍在 4 秒内以代码 15 退出。排除了：管理员权限不一致（两边都不是管理员）、环境变量、作业对象的 UI 限制、48 小时压测（mock，不用 Office）。
   没有改动 Office、注册表或系统设置；建议用户做 Office 快速修复或重启（重启会中断正在跑的 48 小时压测）。
 
+## 2026-10-19 下午：Codex 接入 zpproxy；Office 自动化诊断
+
+**接入**（用户要求，原话：“帮我把我电脑的codex连接到这个上去”）：`~/.codex/config.toml` 加 `model_provider = "zpproxy"` 和
+`[model_providers.zpproxy]`（`base_url = https://webaiproxy.top/v1`、`wire_api = "responses"`、`env_key = "ZPPROXY_API_KEY"`）；
+密钥存进用户环境变量 `ZPPROXY_API_KEY`，没有写进任何仓库或文档，也没有覆盖原有的 `OPENAI_API_KEY`。改前备份 `config.toml.zpproxy-bak-20261019-134935`。
+
+- `/v1/models` 返回 13 个模型（含 `gpt-6.1-sol`、`gpt-6-astra`、`gpt-image-*`）；`gpt-6.1-sol` 文字回合正常。
+- 会话里有 `image_gen.imagegen` 工具；明确要求调用后，rollout 里出现 `response_item` / `image_generation_call`（`ig_` id，PNG 内嵌在记录里，
+  不写 `generated_images`）。只说“用 image_gen 画”时，模型两次直接回答 DONE、没有调用：出图步骤本来就按“恰好一次调用”校验，会重试。
+- 服务的来源校验原来只认 `exec-` 宿主记录 → 现在也接受 `ig_` 的 `image_generation_call`，并在旁注里记 `record_kind` 和
+  `model_provider`（`63fd379`）。真实验证：J-plan-real-001 的 S03 经代理重画，112 s，`prompt_match=exact`，`validated-host-record`。
+- **与项目规则的冲突，已告知用户**：原仓库 AGENTS.md 写“不得用 image API、代理或其他提供方作为后备”。走代理时母版的来源旁注
+  会写明 `model_provider: zpproxy`，不会冒充直连账号出图；代理方能看到代理会话里读到的所有客户资料。
+
+**Office 自动化**（还没解决）：PowerPoint、Excel、Word 三个都在 `New-Object -ComObject` 时失败（0x80080005；系统日志 DCOM 10000
+“拒绝访问 0x80070005”和 10010 超时）；直接启动 4 秒内以代码 15 退出；`/safe` 能启动。从 Codex（经代理）跑同一个渲染脚本，也是
+UnauthorizedAccessException，所以不是 Claude 进程特有的问题。最后一次成功是 00:17，第一次失败是 13:12。已排除：Office 程序与用户
+目录的权限（Codex 沙箱只加了允许项）、环境变量（含 explorer 和注册表）、管理员权限不一致、作业对象 UI 限制、Defender（期间只有 03:17 的病毒库更新，
+没有拦截记录）、48 小时压测（mock）。机器从 10-17 12:48 起没有重启过，有 124 条待重启文件替换（与 Office 无关）。仍可能相关：
+Click-to-Run `ApplyInitiated=1`、联想电脑管家 / Sangfor aTrust 的进程管控。下一步需要用户：重启电脑（会中断另一会话的 48 小时压测），
+或 Office 快速修复。没有改动任何 Office、注册表、安全软件或系统设置。
+
