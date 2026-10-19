@@ -13,7 +13,7 @@ from typing import Any
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
-from autoppt_api.models import Job, JobPhase, Notification, UsageRecord, User, Worker, now
+from autoppt_api.models import Job, JobEvent, JobPhase, Notification, UsageRecord, User, Worker, now
 from autoppt_api.services import aware, iso
 
 THRESHOLDS = {
@@ -71,8 +71,13 @@ def health(session: Session, *, lease_timeout_s: int = 900) -> dict[str, Any]:
         alerts.append({"kind": "no_worker_online", "detail": "no worker has sent a heartbeat recently"})
     if waiting and not online:
         alerts.append({"kind": "work_without_workers", "detail": f"{len(waiting)} phases waiting and no worker online"})
-    if deferred:
-        alerts.append({"kind": "account_limits", "detail": f"{len(deferred)} phases deferred by Codex usage limits"})
+    # A retryable phase failure also sets not_before (back-off); only the rest are account usage limits.
+    retrying = {job.id for job in deferred if session.scalar(
+        select(JobEvent.kind).where(JobEvent.job_id == job.id).order_by(JobEvent.id.desc()).limit(1)) == "retry"}
+    if len(deferred) > len(retrying):
+        alerts.append({"kind": "account_limits", "detail": f"{len(deferred) - len(retrying)} phases deferred by Codex usage limits"})
+    if retrying:
+        alerts.append({"kind": "retry_backoff", "detail": f"{len(retrying)} phases waiting to retry after a failure"})
     costly = job_cost_alerts(session, since)
     if costly:
         alerts.append({"kind": "job_cost", "detail": "; ".join(costly)})

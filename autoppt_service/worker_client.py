@@ -143,8 +143,26 @@ class ApiWorker:
 
     # ------------------------------------------------------------ http helpers
 
+    def _send(self, method: str, url: str, *, retry: bool = True, **kwargs: Any) -> Any:
+        """One HTTP call; transport errors are retried twice (0.5 s, 1.5 s) unless ``retry`` is off.
+
+        The 48-hour soak (2026-10-19) lost a whole phase to one aborted connection (WinError 10053) and waited
+        out the retry back-off.  Every worker call except leasing is safe to repeat: uploads return the existing
+        artifact, reports carry idempotency keys, heartbeats only extend the lease."""
+        import httpx
+
+        for attempt in range(3 if retry else 1):
+            try:
+                return getattr(self.http, method)(url, **kwargs)
+            except httpx.TransportError:
+                if not retry or attempt == 2:
+                    raise
+                time.sleep(0.5 + attempt)
+        raise AssertionError("unreachable")
+
     def _post(self, url: str, payload: dict[str, Any], **headers: str) -> Any:
-        response = self.http.post(url, json=payload, headers={**self.headers, **headers})
+        # A repeated lease could take a second job while the first lease runs out; never retry it.
+        response = self._send("post", url, retry=url != "/api/worker/lease", json=payload, headers={**self.headers, **headers})
         if response.status_code == 204:
             return None
         if response.status_code >= 400:
@@ -152,13 +170,14 @@ class ApiWorker:
         return response.json()
 
     def _download(self, url: str) -> bytes:
-        response = self.http.get(url)
+        response = self._send("get", url)
         if response.status_code != 200:
             raise WorkerClientError(f"download failed: {response.status_code}")
         return response.content
 
     def _upload(self, job_id: str, lease_token: str, kind: str, path: str, data: bytes) -> dict[str, Any]:
-        response = self.http.put(
+        response = self._send(
+            "put",
             f"/api/worker/jobs/{job_id}/artifacts",
             params={"kind": kind, "path": path, "lease_token": lease_token},
             content=data,

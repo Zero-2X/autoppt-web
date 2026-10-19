@@ -235,3 +235,45 @@ def test_overlapping_phases_restore_temp_to_a_folder_that_exists(tmp_path, monke
     assert os.environ["TEMP"] == str(tmp_path / "job-b" / "tmp") and (tmp_path / "job-b" / "tmp").is_dir()
     b.__exit__(None, None, None)
     assert os.environ["TEMP"] == os.environ["TMP"] == str(tmp_path / "original")
+
+
+def test_worker_retries_transport_errors_but_never_a_lease(tmp_path):
+    import httpx
+
+    calls = []
+
+    class Flaky:
+        def __init__(self, failures):
+            self.failures = failures
+
+        def post(self, url, **kwargs):
+            calls.append(url)
+            if self.failures:
+                self.failures -= 1
+                raise httpx.ReadError("[WinError 10053] connection aborted")
+            return httpx.Response(200, json={"ok": True})
+
+    worker = ApiWorker(Flaky(2), "t", tmp_path, mock=True, min_free_gb=0)
+    assert worker._post("/api/worker/jobs/j1/heartbeat", {}) == {"ok": True}
+    assert calls == ["/api/worker/jobs/j1/heartbeat"] * 3
+    calls.clear()
+    worker = ApiWorker(Flaky(1), "t", tmp_path, mock=True, min_free_gb=0)
+    with pytest.raises(httpx.ReadError):
+        worker._post("/api/worker/lease", {})
+    assert calls == ["/api/worker/lease"]
+
+
+def test_health_separates_retry_backoff_from_account_limits(api, world):
+    from autoppt_api.models import Job, JobEvent, now
+    from autoppt_api.monitoring import health
+
+    job = api.post("/api/jobs", json={"request": request_body(world["sha"])}, headers=world["user"]).json()
+    total = api.post(f"/api/jobs/{job['id']}/estimate", headers=world["user"]).json()["total"]
+    api.post(f"/api/jobs/{job['id']}/submit", json={"confirm_total": total}, headers=world["user"])
+    with api.app.state.session_factory() as session:
+        row = session.get(Job, job["id"])
+        row.not_before = now() + timedelta(minutes=2)
+        session.add(JobEvent(job_id=row.id, kind="retry", message="intake failed, retry 2: ReadError"))
+        session.commit()
+        kinds = {a["kind"] for a in health(session)["alerts"]}
+    assert "retry_backoff" in kinds and "account_limits" not in kinds
