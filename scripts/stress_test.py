@@ -50,6 +50,33 @@ def _open_files(process: psutil.Process) -> int:
         return -1
 
 
+def lock_watch(db_path: Path, out: Path, stop: threading.Event, *, stall_s: float = 180.0) -> None:
+    """Dump every thread's stack when SQLite's write lock stays taken for ``stall_s`` (a hang, not load).
+
+    Added after a soak stopped for 20+ minutes and py-spy could not attach to the process."""
+    import faulthandler
+    import sqlite3
+
+    busy_since = None
+    while not stop.wait(30):
+        try:
+            probe = sqlite3.connect(str(db_path), timeout=5, isolation_level=None)
+            try:
+                probe.execute("BEGIN IMMEDIATE")
+                probe.execute("ROLLBACK")
+                busy_since = None
+            finally:
+                probe.close()
+        except sqlite3.OperationalError:
+            busy_since = busy_since or time.monotonic()
+            if time.monotonic() - busy_since > stall_s:
+                with out.open("a", encoding="utf-8") as handle:
+                    handle.write(f"\n==== write lock held for {time.monotonic() - busy_since:.0f}s at {time.ctime()}\n")
+                    handle.flush()
+                    faulthandler.dump_traceback(file=handle, all_threads=True)
+                busy_since = time.monotonic()  # next dump after another stall_s
+
+
 def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -264,6 +291,9 @@ def main(argv: list[str] | None = None) -> int:
         thread.start()
         users.append(thread)
 
+    if settings.database_url.startswith("sqlite:///"):
+        threading.Thread(target=lock_watch, args=(Path(settings.database_url[len("sqlite:///"):]), work / "stall-stacks.txt",
+                                                  stop_workers), daemon=True).start()
     started = time.monotonic()
     checks = []
     deadline = started + args.minutes * 60
